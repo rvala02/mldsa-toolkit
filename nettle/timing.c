@@ -1,18 +1,18 @@
 #include <memory.h>
 #include <string.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <errno.h>
+#include <assert.h>
 
-#include <openssl/err.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/core_names.h>
-#include <openssl/params.h>
-#include <openssl/provider.h>
+#include <nettle/base64.h>
+#include <nettle/ml-dsa.h>
+
+#define DER_HEADER_SIZE 66
 
 static void help(const char *name) {
     fprintf(stderr, "Usage: %s -i file -o file -t file -k file -n num [-h]\n", name);
@@ -22,7 +22,7 @@ static void help(const char *name) {
     fprintf(stderr, " -t file    File where to write timing data\n");
     fprintf(stderr, " -k file    File with the ML-DSA private key in PEM format\n");
     fprintf(stderr, " -n num     Length of individual messages in bytes\n");
-    fprintf(stderr, " -s num     ML-DSA parameter set: 44, 65, or 87 (default: 44)\n");
+    fprintf(stderr, " -s num     ML-DSA parameter set: 65 or 87 (default: 65)\n");
     fprintf(stderr, " -h         This message\n");
 }
 
@@ -84,38 +84,83 @@ uint64_t get_time_after() {
     return time_after;
 }
 
+typedef void sign_func (const uint8_t *key,
+                        size_t msg_len, const uint8_t *msg,
+                        size_t ctx_len, const uint8_t *ctx,
+                        void *random_ctx, nettle_random_func *random,
+                        uint8_t *signature);
+
+static void
+random_zero(void *ctx, size_t n, uint8_t *dst)
+{
+    memset(dst, 0, n);
+}
+
+static bool pem_read_privkey(FILE *fp, uint8_t **data, size_t size)
+{
+    uint8_t *buffer;
+    char *p;
+    size_t cap = ((DER_HEADER_SIZE + size) / 3) * 4 + 1 /*NUL*/;
+
+    buffer = malloc(cap);
+    if (!buffer)
+        return false;
+    p = (char *)buffer;
+
+    for (;;) {
+        char line[256], *nl;
+
+        if (fgets(line, sizeof(line), fp) == NULL)
+            break;
+        if (strspn(line, " \t\n") == strlen(line) ||
+            strstr(line, "-----BEGIN ") || strstr(line, "-----END "))
+            continue;
+
+        nl = strchr(line, '\n');
+        if (nl)
+            *nl = '\0';
+        p = stpcpy(p, line);
+    }
+
+    struct base64_decode_ctx decode;
+    size_t done;
+    base64_decode_init(&decode);
+    base64_decode_update(&decode, &done, buffer,
+                         strlen((char *)buffer), (const char *)buffer);
+    base64_decode_final(&decode);
+    if (done != DER_HEADER_SIZE + size) {
+        free(buffer);
+        return false;
+    }
+
+    memmove(buffer, buffer + (done - size), size);
+    *data = buffer;
+    return true;
+}
+
 int main(int argc, char *argv[]) {
     int result = 1;
     int r_ret;
 
-    EVP_PKEY_CTX *ctx = NULL;
-    EVP_PKEY *pkey = NULL;
-    EVP_SIGNATURE *sig_alg = NULL;
-
+    size_t key_len = 0;
     size_t msg_len = 0;
     size_t sig_len = 0;
-    size_t sig_cap = 0;
 
-    int mldsa_level = 44; /* default: ML-DSA-44 */
+    int mldsa_level = 65; /* default: ML-DSA-65 */
+    const char *alg_name;
+    sign_func *sign;
 
     FILE *fp = NULL;
 
     char *key_file_name = NULL, *in_file_name = NULL, *out_file_name = NULL, *time_file_name = NULL;
     int in_fd = -1, out_fd = -1, time_fd = -1;
 
+    unsigned char *key = NULL;
     unsigned char *msg = NULL;
     unsigned char *sig = NULL;
 
     int opt;
     uint64_t time_before, time_after, time_diff;
-
-    OSSL_PROVIDER *prov_default = NULL;
-
-    int deterministic = 1;
-    OSSL_PARAM params[] = {
-        OSSL_PARAM_construct_int(OSSL_SIGNATURE_PARAM_DETERMINISTIC, &deterministic),
-        OSSL_PARAM_END
-    };
 
     while ((opt=getopt(argc, argv, "i:o:t:k:n:s:h")) != -1) {
         switch (opt) {
@@ -139,12 +184,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (mldsa_level != 44 && mldsa_level != 65 && mldsa_level != 87) {
+    if (mldsa_level != 65 && mldsa_level != 87) {
         fprintf(stderr,
-                "Invalid ML-DSA parameter set: %d (use 44, 65, or 87)\n",
+                "Invalid ML-DSA parameter set: %d (use 65 or 87)\n",
                 mldsa_level);
         return 1;
-    }    
+    }
 
     /* Open files */
     in_fd = open(in_file_name, O_RDONLY);
@@ -165,17 +210,30 @@ int main(int argc, char *argv[]) {
         goto err;
     }
 
-    prov_default = OSSL_PROVIDER_load(NULL, "default");
-    if (!prov_default) {
-        fprintf(stderr, "Failed to load default provider\n");
-        goto err;
-    }
-
     /* Allocate message buffer */
     fprintf(stderr, "malloc(msg) - size %zu\n", msg_len);
     msg = malloc(msg_len);
     if (!msg)
         goto err;
+
+    /* Signature algorithm */
+    switch (mldsa_level) {
+    case 65:
+        alg_name = "ML-DSA-65";
+        sign = ml_dsa_65_sign;
+        key_len = ML_DSA_65_PRIVATE_KEY_SIZE;
+        sig_len = ML_DSA_65_SIGNATURE_SIZE;
+        break;
+    case 87:
+        alg_name = "ML-DSA-87";
+        sign = ml_dsa_87_sign;
+        key_len = ML_DSA_87_PRIVATE_KEY_SIZE;
+        sig_len = ML_DSA_87_SIGNATURE_SIZE;
+        break;
+    default:
+        assert(0);
+        goto err;
+    }
 
     /* Load key (PEM format) */
     fp = fopen(key_file_name, "r");
@@ -184,53 +242,22 @@ int main(int argc, char *argv[]) {
         goto err;
     }
 
-    if ((pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL)) == NULL)
+    if (!pem_read_privkey(fp, &key, key_len)) {
+        fprintf(stderr, "can't read key file %s\n", key_file_name);
         goto err;
+    }
 
     if (fclose(fp) != 0)
         goto err;
     fp = NULL;
 
-    /* Signature algorithm */
-
-    char alg_name[16];
-
-    snprintf(alg_name, sizeof(alg_name), "ML-DSA-%d", mldsa_level);
-    sig_alg = EVP_SIGNATURE_fetch(NULL, alg_name, NULL);
-    if (!sig_alg) {
-        fprintf(stderr, "EVP_SIGNATURE_fetch(%s) failed\n", alg_name);
-        goto err;
-    }
-
-    sig_cap = EVP_PKEY_get_size(pkey);
-    if (sig_cap == 0) {
-        fprintf(stderr, "EVP_PKEY_get_size() failed or returned 0\n");
-        goto err;
-    }
-
-    if (!EVP_PKEY_is_a(pkey, alg_name)) {
-        fprintf(stderr,
-                "Private key does not match selected algorithm (%s)\n",
-                alg_name);
-        goto err;
-    }
-
-    fprintf(stderr, "malloc(sig) - size %zu\n", sig_cap);
-    sig = malloc(sig_cap);
-    if (!sig)
-        goto err;
-
-    /* Create ctx */
-    ctx = EVP_PKEY_CTX_new_from_pkey(NULL, pkey, NULL);
-    if (!ctx)
-        goto err;
-
-    fprintf(stderr, "EVP_PKEY_sign_message_init(deterministic=1)\n");
-    if (EVP_PKEY_sign_message_init(ctx, sig_alg, params) <= 0)
-        goto err;
-
     fprintf(stderr, "Using %s\n", alg_name);
     fprintf(stderr, "Signing messages...\n");
+
+    fprintf(stderr, "malloc(sig) - size %zu\n", sig_len);
+    sig = malloc(sig_len);
+    if (!sig)
+        goto err;
 
     while((r_ret = read(in_fd, msg, msg_len)) > 0) {
         if ((size_t)r_ret != msg_len) {
@@ -238,21 +265,13 @@ int main(int argc, char *argv[]) {
             goto err;
         }
 
-        sig_len = sig_cap;
-
         time_before = get_time_before();
-        r_ret = EVP_PKEY_sign(ctx, sig, &sig_len, msg, msg_len);
+        sign(key,
+             msg_len, msg,
+             0 /*ctx_len*/, NULL /*ctx*/,
+             NULL /*random_ctx*/, random_zero /*random*/,
+             sig);
         time_after = get_time_after();
-
-        if (r_ret <=0) {
-            fprintf(stderr, "Signing failure\n");
-        }
-
-        /* signature size check */
-        if (sig_len > sig_cap) {
-            fprintf(stderr, "Signature length overflow: %zu > %zu\n", sig_len, sig_cap);
-            goto err;
-        }
 
         time_diff = time_after - time_before;
 
@@ -273,20 +292,16 @@ int main(int argc, char *argv[]) {
 
 err:
     fprintf(stderr, "failed!\n");
-    ERR_print_errors_fp(stderr);
     result = 1;
 
 out:
+    free(key);
     free(msg);
     free(sig);
-    EVP_PKEY_CTX_free(ctx);
-    EVP_SIGNATURE_free(sig_alg);
-    EVP_PKEY_free(pkey);
     if (in_fd >=0) close(in_fd);
     if (out_fd >=0) close(out_fd);
     if (time_fd >=0) close(time_fd);
     if (fp) fclose(fp);
-    if (prov_default) OSSL_PROVIDER_unload(prov_default);
 
     return result;
 }
