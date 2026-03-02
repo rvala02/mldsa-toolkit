@@ -100,7 +100,7 @@ static bool pem_read_privkey(FILE *fp, uint8_t **data, size_t size)
 {
     uint8_t *buffer;
     char *p;
-    size_t cap = ((DER_HEADER_SIZE + size) / 3) * 4 + 1 /*NUL*/;
+    size_t cap = BASE64_ENCODE_RAW_LENGTH(DER_HEADER_SIZE + size) * 4 + 1 /*NUL*/;
 
     buffer = malloc(cap);
     if (!buffer)
@@ -121,12 +121,16 @@ static bool pem_read_privkey(FILE *fp, uint8_t **data, size_t size)
             *nl = '\0';
         p = stpcpy(p, line);
     }
+    *p = '\0';
 
     struct base64_decode_ctx decode;
-    size_t done;
     base64_decode_init(&decode);
-    base64_decode_update(&decode, &done, buffer,
-                         strlen((char *)buffer), (const char *)buffer);
+    size_t done = strlen((char *)buffer);
+    if (base64_decode_update(&decode, &done, buffer,
+                             done, (const char *)buffer) < 0) {
+        free(buffer);
+        return false;
+    }
     base64_decode_final(&decode);
     if (done != DER_HEADER_SIZE + size) {
         free(buffer);
