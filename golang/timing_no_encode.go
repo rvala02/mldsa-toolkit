@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 )
 
 func helpMsg() {
@@ -129,9 +128,7 @@ func main() {
 			break
 		}
 
-		start := time.Now()
-		sig, err := mldsa.SignDeterministic(privKey, msgBuf, "")
-		diff := time.Since(start).Nanoseconds()
+		sig, diff, err := mldsa.SignDeterministic(privKey, msgBuf, "")
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error signing: %v\n", err)
