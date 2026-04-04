@@ -19,35 +19,39 @@ def main():
     print("Creating folders for CSV files")
 
     properties = (
-            'hw-rho-prime',
-            'bit-size-rho-prime',
-
-            'hw-y',
-            'bit-size-y',
-            'ntt-hw-y',
-            'ntt-bit-size-y',
-
-            'hw-w',
-            'bit-size-w',
-            'ntt-hw-w',
-            'ntt-bit-size-w',
-
-            'hw-c-s1',
-            'bit-size-c-s1',
-            'ntt-hw-c-s1',
-            'ntt-bit-size-c-s1',
-
-            'hw-c-s2',
-            'bit-size-c-s2',
-            'ntt-hw-c-s2',
-            'ntt-bit-size-c-s2',
-
-            'hw-w-cs2-low-bits',
-            'bit-size-w-cs2-low-bits',
-
-            'inf-norm-z',
-            'inf-norm-y',
-            'inf-norm-w0',
+        "hw-rho-prime",
+        "bit-size-rho-prime",
+        "rho-prime-n-zero",
+        "hw-y",
+        "bit-size-y",
+        "y-n-zero",
+        "y-n-need-reduction",
+        "y-n-fully-low-bit",
+        "y-n-above-low-bit-cutoff",
+        "ntt-hw-y",
+        "ntt-bit-size-y",
+        "hw-w",
+        "bit-size-w",
+        "w-n-zero",
+        "w-n-need-reduction",
+        "w-n-fully-low-bit",
+        "w-n-above-low-bit-cutoff",
+        "ntt-hw-w",
+        "ntt-bit-size-w",
+        "hw-c-s1",
+        "bit-size-c-s1",
+        "c-s1-n-zero",
+        "c-s1-n-need-reduction",
+        "ntt-hw-c-s1",
+        "ntt-bit-size-c-s1",
+        "hw-c-s2",
+        "bit-size-c-s2",
+        "c-s2-n-zero",
+        "c-s2-n-need-reduction",
+        "ntt-hw-c-s2",
+        "ntt-bit-size-c-s2",
+        "hw-w0",
+        "bit-size-w0",
         )
 
     for property in properties:

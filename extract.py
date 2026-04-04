@@ -2157,6 +2157,42 @@ class Extract:
                             c -= q
                     yield int(c)
 
+    def _vector_coeff_stats(self, vector, q, alpha=None):
+        """
+        For a polynomial vector in coefficient domain, compute:
+        - n_zero: number of coefficients equal to 0
+        - n_need_reduction: number of coefficients outside [-q/2, q/2) (would need modular reduction)
+        - n_fully_low_bit / n_above_low_bit_cutoff: (if alpha) split by |c| <= alpha//2.
+        """
+        n_zero = 0
+        n_need_reduction = 0
+        n_fully_low_bit = 0
+        n_above_low_bit_cutoff = 0
+        half_q = q // 2
+        alpha_half = (alpha // 2) if alpha is not None else None
+
+        for c in self._iter_vector_coeffs(vector, centered=False):
+            c = int(c)
+            if c == 0:
+                n_zero += 1
+            c_red = c % q
+            if c_red > half_q:
+                c_red -= q
+            if c != c_red:
+                n_need_reduction += 1
+            if alpha_half is not None:
+                ac = abs(c)
+                if ac <= alpha_half:
+                    n_fully_low_bit += 1
+                else:
+                    n_above_low_bit_cutoff += 1
+
+        out = {"n_zero": n_zero, "n_need_reduction": n_need_reduction}
+        if alpha is not None:
+            out["n_fully_low_bit"] = n_fully_low_bit
+            out["n_above_low_bit_cutoff"] = n_above_low_bit_cutoff
+        return out
+
     def _prepare_ml_dsa_context(self, scheme, sk):
         rho, k, tr, s1, s2, t0 = scheme._unpack_sk(sk)
 
@@ -2221,32 +2257,33 @@ class Extract:
         # r0 = low_bits(w-cs2)
         c_s2_hat = s2_hat.scale(c_hat)
         c_s2 = c_s2_hat.from_ntt()
-        r0 = (w-c_s2).low_bits(alpha)
+
+        w0 = w.low_bits(alpha)
 
         # === Features ===
         if rho_prime is not None:
             values["hw-rho-prime"] = bit_count(bytesToNumber(rho_prime))
             values["bit-size-rho-prime"] = bit_length(bytesToNumber(rho_prime))
-        
+            values["rho-prime-n-zero"] = sum(1 for b in rho_prime if b == 0)
+
         # y coeff domain
         y_hw = 0
         y_bits = 0
-        y_inf = 0
         for c0 in self._iter_vector_coeffs(y):
-            ac = abs(c0)
             y_hw += bit_count(c0)
             y_bits += bit_length(c0)
-            if ac > y_inf:
-                y_inf = ac
         values["hw-y"] = y_hw
         values["bit-size-y"] = y_bits
-        values["inf-norm-y"] = y_inf
+        sy = self._vector_coeff_stats(y, q, alpha)
+        values["y-n-zero"] = sy["n_zero"]
+        values["y-n-need-reduction"] = sy["n_need_reduction"]
+        values["y-n-fully-low-bit"] = sy["n_fully_low_bit"]
+        values["y-n-above-low-bit-cutoff"] = sy["n_above_low_bit_cutoff"]
 
         # y NTT domain
         y_ntt_hw = 0
         y_ntt_bits = 0
         for c0 in self._iter_vector_coeffs(y_hat):
-            ac = abs(c0)
             y_ntt_hw += bit_count(c0)
             y_ntt_bits += bit_length(c0)
         values["ntt-hw-y"] = y_ntt_hw
@@ -2256,17 +2293,20 @@ class Extract:
         w_hw = 0
         w_bits = 0
         for c0 in self._iter_vector_coeffs(w):
-            ac = abs(c0)
             w_hw += bit_count(c0)
             w_bits += bit_length(c0)
         values["hw-w"] = w_hw
         values["bit-size-w"] = w_bits
+        sw = self._vector_coeff_stats(w, q, alpha)
+        values["w-n-zero"] = sw["n_zero"]
+        values["w-n-need-reduction"] = sw["n_need_reduction"]
+        values["w-n-fully-low-bit"] = sw["n_fully_low_bit"]
+        values["w-n-above-low-bit-cutoff"] = sw["n_above_low_bit_cutoff"]
 
         # w NTT domain
         w_ntt_hw = 0
         w_ntt_bits = 0
         for c0 in self._iter_vector_coeffs(w_hat):
-            ac = abs(c0)
             w_ntt_hw += bit_count(c0)
             w_ntt_bits += bit_length(c0)
         values["ntt-hw-w"] = w_ntt_hw
@@ -2276,16 +2316,17 @@ class Extract:
         cs1_hw = 0
         cs1_bits = 0
         for c0 in self._iter_vector_coeffs(c_s1):
-            ac = abs(c0)
             cs1_hw += bit_count(c0)
             cs1_bits += bit_length(c0)
         values["hw-c-s1"] = cs1_hw
         values["bit-size-c-s1"] = cs1_bits
+        scs1 = self._vector_coeff_stats(c_s1, q)
+        values["c-s1-n-zero"] = scs1["n_zero"]
+        values["c-s1-n-need-reduction"] = scs1["n_need_reduction"]
 
         cs1_ntt_hw = 0
         cs1_ntt_bits = 0
         for c0 in self._iter_vector_coeffs(c_s1_hat):
-            ac = abs(c0)
             cs1_ntt_hw += bit_count(c0)
             cs1_ntt_bits += bit_length(c0)
         values["ntt-hw-c-s1"] = cs1_ntt_hw
@@ -2295,34 +2336,29 @@ class Extract:
         cs2_hw = 0
         cs2_bits = 0
         for c0 in self._iter_vector_coeffs(c_s2):
-            ac = abs(c0)
             cs2_hw += bit_count(c0)
             cs2_bits += bit_length(c0)
         values["hw-c-s2"] = cs2_hw
         values["bit-size-c-s2"] = cs2_bits
+        scs2 = self._vector_coeff_stats(c_s2, q)
+        values["c-s2-n-zero"] = scs2["n_zero"]
+        values["c-s2-n-need-reduction"] = scs2["n_need_reduction"]
 
         cs2_ntt_hw = 0
         cs2_ntt_bits = 0
         for c0 in self._iter_vector_coeffs(c_s2_hat):
-            ac = abs(c0)
             cs2_ntt_hw += bit_count(c0)
             cs2_ntt_bits += bit_length(c0)
         values["ntt-hw-c-s2"] = cs2_ntt_hw
-        values["ntt-bit-size-c-s2"] = cs2_ntt_bits       
+        values["ntt-bit-size-c-s2"] = cs2_ntt_bits
 
-        # (w - c*s2).low_bits(alpha)
         w0_hw = 0
         w0_bits = 0
-        w0_inf = 0
-        for c0 in self._iter_vector_coeffs(r0):
-            ac = abs(c0)
+        for c0 in self._iter_vector_coeffs(w0):
             w0_hw += bit_count(c0)
             w0_bits += bit_length(c0)
-            if ac > w0_inf:
-                w0_inf = ac
-        values["hw-w-cs2-low-bits"] = w0_hw
-        values["bit-size-w-cs2-low-bits"] = w0_bits
-        values["inf-norm-w0"] = w0_inf
+        values["hw-w0"] = w0_hw
+        values["bit-size-w0"] = w0_bits
 
         return values
 
@@ -2342,26 +2378,37 @@ class Extract:
         value_names = {
             "hw-rho-prime": {"window": 17},
             "bit-size-rho-prime": {"window": 17},
+            "rho-prime-n-zero": {"window": 17},
             "hw-y": {"window": 30},
             "bit-size-y": {"window": 30},
+            "y-n-zero": {"window": 30},
+            "y-n-need-reduction": {"window": 30},
+            "y-n-fully-low-bit": {"window": 30},
+            "y-n-above-low-bit-cutoff": {"window": 30},
             "ntt-hw-y": {"window": 30},
             "ntt-bit-size-y": {"window": 30},
             "hw-w": {"window": 30},
             "bit-size-w": {"window": 30},
+            "w-n-zero": {"window": 30},
+            "w-n-need-reduction": {"window": 30},
+            "w-n-fully-low-bit": {"window": 30},
+            "w-n-above-low-bit-cutoff": {"window": 30},
             "ntt-hw-w": {"window": 30},
             "ntt-bit-size-w": {"window": 30},
             "hw-c-s1": {"window": 30},
             "bit-size-c-s1": {"window": 30},
+            "c-s1-n-zero": {"window": 30},
+            "c-s1-n-need-reduction": {"window": 30},
             "ntt-hw-c-s1": {"window": 30},
             "ntt-bit-size-c-s1": {"window": 30},
             "hw-c-s2": {"window": 30},
             "bit-size-c-s2": {"window": 30},
+            "c-s2-n-zero": {"window": 30},
+            "c-s2-n-need-reduction": {"window": 30},
             "ntt-hw-c-s2": {"window": 30},
             "ntt-bit-size-c-s2": {"window": 30},
-            "hw-w-cs2-low-bits": {"window": 30},
-            "bit-size-w-cs2-low-bits": {"window": 30},
-            "inf-norm-y": {"window": 5},
-            "inf-norm-w0": {"window": 5},
+            "hw-w0": {"window": 30},
+            "bit-size-w0": {"window": 30},
         }
 
         try:
