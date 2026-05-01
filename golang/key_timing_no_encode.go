@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 )
 
 func helpMsg() {
 	fmt.Println(`
-key_timing.go -i file -o file -t file -k file -n num [-m scheme]
+key_timing_no_encode.go -i file -o file -t file -k file -n num [-m scheme]
 
 -i file      File with concatenated messages to sign
 -o file      File where to write raw signatures (concatenated)
@@ -154,9 +153,7 @@ func main() {
 			continue
 		}
 
-		start := time.Now()
-		sig, err := mldsa.SignDeterministic(privKey, msgBuf, "")
-		diff := time.Since(start).Nanoseconds()
+		sig, diff, err := mldsa.SignDeterministic(privKey, msgBuf, "")
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error signing: %v\n", err)
