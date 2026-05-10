@@ -1,6 +1,13 @@
+"""
+Usage:
+    python generate_schedule_keys.py -k keys_out -c clean|early -s 44|65|87 -r N -o schedule.bin -d messages.bin -l log.csv -f pem|seed
+
+schedule.bin: expanded SK from key_XX/sk.pem (--format pem) or 32-byte seed.bin (--format seed).
+"""
 import argparse
 import csv
 import random
+import sys
 from pathlib import Path
 
 from dilithium_py.ml_dsa.pkcs import sk_from_pem
@@ -11,6 +18,7 @@ SK_SIZES = {
     "87": 4896,
 }
 
+SEED_SIZE = 32
 MSG_SIZE = 32
 
 
@@ -28,6 +36,13 @@ def parse_args():
     p.add_argument("-o", "--schedule", default="schedule.bin")
     p.add_argument("-d", "--messages", default="messages.bin")
     p.add_argument("-l", "--log", default="log.csv")
+    p.add_argument(
+        "--format", "-f",
+        type=str,
+        choices=["pem", "seed"],
+        default="pem",
+        help="Key material: pem (sk.pem, expanded SK) or seed (seed.bin, 32 bytes)",
+    )
 
     return p.parse_args()
 
@@ -36,7 +51,12 @@ def main():
     args = parse_args()
 
     keys_dir = Path(args.keys)
-    expected_sk_size = SK_SIZES[args.scheme]
+    if args.format == "pem":
+        expected_key_size = SK_SIZES[args.scheme]
+        key_filename = "sk.pem"
+    else:
+        expected_key_size = SEED_SIZE
+        key_filename = "seed.bin"
 
     keys = {}
     messages = {}
@@ -47,11 +67,22 @@ def main():
 
         key_id = int(key_dir.name.split("_")[1])
 
-        sk_pem = key_dir / "sk.pem"
-        _, sk_bytes, _, _ = sk_from_pem(sk_pem.read_bytes())
+        key_file = key_dir / key_filename
+        if not key_file.exists():
+            continue
 
-        if len(sk_bytes) != expected_sk_size:
-            raise ValueError(f"key_{key_id:03d}: wrong key size")
+        raw = key_file.read_bytes()
+        if args.format == "pem":
+            _, sk_bytes, _, _ = sk_from_pem(raw)
+        else:
+            sk_bytes = raw
+
+        if len(sk_bytes) != expected_key_size:
+            print(
+                f"ERROR: key_{key_id:03d} has wrong size: "
+                f"{len(sk_bytes)} != {expected_key_size}"
+            )
+            sys.exit(1)
 
         msg_csv = key_dir / f"{args.cls}.csv"
         if not msg_csv.exists():
@@ -75,6 +106,9 @@ def main():
         messages[key_id] = msgs
 
     key_ids = sorted(keys.keys())
+    if not key_ids:
+        print("ERROR: No keys found in directory")
+        sys.exit(1)
 
     with open(args.schedule, "wb") as sched_fd, \
          open(args.messages, "wb") as msg_fd, \

@@ -1,3 +1,7 @@
+"""
+Usage:
+    python create_folders.py -o output_dir
+"""
 import argparse
 from pathlib import Path
 import shutil
