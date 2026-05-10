@@ -1,5 +1,6 @@
 """
-Measure ML-DSA signing times of dilithium-py.
+Usage:
+    python timing.py -i messages.bin -o signatures.bin -t timings.csv -s mldsa-44 -k sk.pem --size 32
 """
 import argparse
 import sys
