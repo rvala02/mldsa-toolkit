@@ -1,5 +1,6 @@
 """
-Generates ML-DSA keys and random messages for signing.
+Usage:
+    python generate_data.py --keys --messages --size 32 --scheme mldsa-44 --count 10000 --output messages.bin
 """
 
 import argparse
@@ -15,8 +16,6 @@ SCHEMES = {
     "mldsa-65": "ML-DSA-65",
     "mldsa-87": "ML-DSA-87"
 }
-
-# MSG_SIZE = 64
 
 def generate_keys(name: str):
     print(f"Generating keys for {name}")
