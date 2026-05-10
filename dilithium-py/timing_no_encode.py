@@ -1,5 +1,6 @@
 """
-Measure ML-DSA signing times of dilithium-py (excluding _pack_sig) .
+Usage:
+    python timing_no_encode.py -i messages.bin -o signatures.bin -t timings.csv -s mldsa-44 -k sk.pem --size 32
 """
 import argparse
 import sys
