@@ -76,9 +76,10 @@ def main():
     print(f"Message size: {MSG_SIZE} bytes", file=sys.stderr)
     print("Timing: scheme._last_time (no_encode)", file=sys.stderr)
 
-    with open(args.keys, "rb") as key_fd, open(args.messages, "rb") as msg_fd, open(
-        args.timings, "w"
-    ) as time_fd, open(args.signatures, "wb") as sig_fd:
+    with open(args.keys, "rb") as key_fd, \
+         open(args.messages, "rb") as msg_fd, \
+         open(args.timings, "w") as time_fd, \
+         open(args.signatures, "wb") as sig_fd:
 
         time_fd.write("raw_times\n")
 

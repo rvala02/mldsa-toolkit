@@ -28,20 +28,17 @@ def parse_args():
     )
     p.add_argument("-k", "--keys", required=True, help="keys_out directory")
     p.add_argument("-c", "--class", dest="cls", required=True,
-                   choices=["clean", "early"],
-                   help="Message class to schedule")
+                    choices=["clean", "early"],
+                    help="Message class to schedule")
     p.add_argument("-s", "--scheme", required=True, choices=["44", "65", "87"])
     p.add_argument("-r", "--rounds", type=int, required=True)
-
     p.add_argument("-o", "--schedule", default="schedule.bin")
     p.add_argument("-d", "--messages", default="messages.bin")
     p.add_argument("-l", "--log", default="log.csv")
-    p.add_argument(
-        "--format", "-f",
-        type=str,
-        choices=["pem", "seed"],
-        default="pem",
-        help="Key material: pem (sk.pem, expanded SK) or seed (seed.bin, 32 bytes)",
+    p.add_argument("--format", "-f", type=str,
+                    choices=["pem", "seed"],
+                    default="pem",
+                    help="Key material: pem (sk.pem, expanded SK) or seed (seed.bin, 32 bytes)",
     )
 
     return p.parse_args()
