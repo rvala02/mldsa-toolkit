@@ -7,6 +7,7 @@ Usage:
         --messages mesages.bin \\
         --messages-per-key 1000 \\
         --scheme 65 \\
+        --signing-mode deterministic \\
         --out raw_rejections.csv
 """
 
@@ -14,6 +15,7 @@ import argparse
 import csv
 import re
 import sys
+import os
 from pathlib import Path
 
 from dilithium_py.ml_dsa.default_parameters import DEFAULT_PARAMETERS
@@ -42,6 +44,7 @@ CSV_HEADER = [
     "key_id",
     "message_id",
     "global_message_id",
+    "rnd",
     "attempts",
     "z_rejections",
     "r0_rejections",
@@ -125,6 +128,12 @@ def parse_args():
         required=True,
         choices=["44", "65", "87"],
         help="ML-DSA scheme: 44, 65, or 87"
+    )
+    parser.add_argument(
+        "--signing-mode", "-sm",
+        choices=["deterministic", "hedged"],
+        default="deterministic",
+        help="Signing mode: deterministic or hedged"
     )
     parser.add_argument(
         "--out", "-o",
@@ -278,10 +287,16 @@ def sign_one_attempt(
     
     return "accepted", kappa, None
 
-def collect_rejection_stats(mldsa, msg, key_state):
+def collect_rejection_stats(mldsa, msg, key_state, signing_mode: str):
     m_prime = bytes([0]) + bytes([len(CTX)]) + CTX + msg
 
-    rnd = bytes([0]*32) # deterministic signing
+    if signing_mode == "deterministic":
+        rnd = bytes([0]*32)
+    elif signing_mode == "hedged":
+        rnd = os.urandom(32)
+    else:
+        error(f"unsupported signing mode: {signing_mode}")
+
     mu = mldsa._h(key_state["tr"] + m_prime, 64)
     rho_prime = mldsa._h(key_state["k"] + rnd + mu, 64)
 
@@ -338,6 +353,7 @@ def collect_rejection_stats(mldsa, msg, key_state):
     )
 
     return {
+        "rnd": rnd.hex(),
         "attempts": attempts,
         "z_rejections": z_rejections,
         "r0_rejections": r0_rejections,
@@ -355,6 +371,7 @@ def write_results_row(writer, key_id, message_id, global_message_id, stats):
         key_id,
         message_id,
         global_message_id,
+        stats["rnd"],
         stats["attempts"],
         stats["z_rejections"],
         stats["r0_rejections"],
@@ -408,6 +425,7 @@ def main():
 
     print(f"Loaded {num_keys} keys")
     print(f"Loaded {total_messages} messages")
+    print(f"Signing mode: {args.signing_mode}")
     print(f"Output: {out_path}")
     print(f"Coefficient output: {coeff_path}")
 
@@ -441,6 +459,7 @@ def main():
                     mldsa,
                     msg,
                     key_state,
+                    args.signing_mode,
                 )
                 del msg
 
