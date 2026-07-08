@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import csv
+import gc
 import re
 import sys
 import os
@@ -143,9 +144,14 @@ def parse_args():
         help="Number of worker processes. Default: 1"
     )
     parser.add_argument(
+        "--resume", "-r",
+        action="store_true",
+        help="Resume from existing per-key part files in .<out_stem>_parts/",
+    )
+    parser.add_argument(
         "--out", "-o",
         required=True,
-        help="Output folder",
+        help="Output CSV file path (coefficients file is derived from this name)",
     )
     return parser.parse_args()
 
@@ -157,34 +163,160 @@ def key_part_paths(out_path, key_id):
     part_dir = out_path.parent / f".{out_path.stem}_parts"
     part_out = part_dir / f"{out_path.stem}.key_{key_id:03d}{out_path.suffix}"
     part_coeff = part_dir / f"{out_path.stem}.key_{key_id:03d}_coefficients{out_path.suffix}"
-    return part_out, part_coeff
+    return part_dir, part_out, part_coeff
 
-def process_key_worker(args_tuple):
-    (
+def flush_outputs(*file_handles):
+    for handle in file_handles:
+        handle.flush()
+        os.fsync(handle.fileno())
+
+def count_csv_data_rows(path):
+    if not path.exists() or path.stat().st_size == 0:
+        return 0
+
+    with open(path, newline="") as in_fd:
+        reader = csv.reader(in_fd)
+        if next(reader, None) is None:
+            return 0
+        return sum(1 for _ in reader)
+
+def part_resume_start(part_out, part_coeff, key_id, messages_per_key, resume):
+    if not resume or not part_out.exists():
+        return 0
+
+    completed_rows = count_csv_data_rows(part_out)
+    if completed_rows == 0:
+        return 0
+
+    if completed_rows >= messages_per_key:
+        return messages_per_key
+
+    with open(part_out, newline="") as in_fd:
+        reader = csv.DictReader(in_fd)
+        last_row = None
+        for last_row in reader:
+            pass
+
+    if last_row is None:
+        return 0
+
+    if int(last_row["key_id"]) != key_id:
+        error(
+            f"part file {part_out} ends with key_id {last_row['key_id']}, "
+            f"expected {key_id}"
+        )
+
+    last_message_id = int(last_row["message_id"])
+    if last_message_id != completed_rows - 1:
+        error(
+            f"part file {part_out} has {completed_rows} rows but last "
+            f"message_id is {last_message_id}"
+        )
+
+    if not part_coeff.exists():
+        error(f"part file {part_out} exists but {part_coeff} is missing")
+
+    if count_csv_data_rows(part_coeff) == 0:
+        error(f"part file {part_out} has data but {part_coeff} is empty")
+
+    print(
+        f"Resuming key_{key_id:03d} from message {completed_rows} "
+        f"({completed_rows}/{messages_per_key} already done)"
+    )
+    return completed_rows
+
+def expected_message_rows(key_dirs, messages_per_key):
+    return len(key_dirs) * messages_per_key
+
+def validate_run_results(results, key_dirs, messages_per_key):
+    expected_rows = expected_message_rows(key_dirs, messages_per_key)
+    total_rows = sum(result["rows"] for result in results)
+
+    if total_rows != expected_rows:
+        error(
+            f"incomplete run: expected {expected_rows} message rows "
+            f"({len(key_dirs)} keys x {messages_per_key}), got {total_rows}"
+        )
+
+    for result in results:
+        if result["rows"] != messages_per_key:
+            error(
+                f"key_{result['key_id']:03d} incomplete: "
+                f"{result['rows']}/{messages_per_key} messages"
+            )
+
+def merge_csv_parts(part_paths, final_path):
+    with open(final_path, "w", newline="") as final_fd:
+        writer = csv.writer(final_fd)
+        wrote_header = False
+
+        for part_path in part_paths:
+            with open(part_path, "r", newline="") as part_fd:
+                reader = csv.reader(part_fd)
+                header = next(reader)
+
+                if not wrote_header:
+                    writer.writerow(header)
+                    wrote_header = True
+
+                for row in reader:
+                    writer.writerow(row)
+
+def merge_csv_parts_atomic(part_paths, final_path):
+    tmp_path = final_path.with_name(f"{final_path.name}.tmp")
+    merge_csv_parts(part_paths, tmp_path)
+    tmp_path.replace(final_path)
+
+def cleanup_part_files(results, part_dir):
+    for result in results:
+        Path(result["part_out"]).unlink(missing_ok=True)
+        Path(result["part_coeff"]).unlink(missing_ok=True)
+
+    try:
+        part_dir.rmdir()
+    except OSError:
+        pass
+
+def process_one_key(
+    key_id,
+    key_dir,
+    mldsa,
+    scheme,
+    messages_path,
+    messages_per_key,
+    total_messages,
+    signing_mode,
+    part_out,
+    part_coeff,
+    resume,
+):
+    part_out.parent.mkdir(parents=True, exist_ok=True)
+
+    start_message_id = part_resume_start(
+        part_out,
+        part_coeff,
         key_id,
-        key_dir_str,
-        scheme,
-        messages_path_str,
         messages_per_key,
-        total_messages,
-        signing_mode,
-        out_path_str,
-    ) = args_tuple
+        resume,
+    )
 
-    key_dir = Path(key_dir_str)
-    messages_path = Path(messages_path_str)
-    out_path = Path(out_path_str)
-
-    part_out, part_coeff = key_part_paths(out_path, key_id)
-
-    mldsa = ML_DSA(SCHEMES[scheme])
+    if start_message_id >= messages_per_key:
+        print(f"key_{key_id:03d} already complete, skipping")
+        return {
+            "key_id": key_id,
+            "rows": messages_per_key,
+            "coeff_rows": count_csv_data_rows(part_coeff),
+            "part_out": str(part_out),
+            "part_coeff": str(part_coeff),
+        }
 
     sk = load_sk(key_dir, scheme)
     key_state = prepare_key_state(mldsa, sk)
     del sk
 
-    total_rows = 0
-    total_coeff_rows = 0
+    total_rows = start_message_id
+    total_coeff_rows = count_csv_data_rows(part_coeff) if part_coeff.exists() else 0
+    last_reported = start_message_id
 
     block_start = key_id * messages_per_key
     block_end = block_start + messages_per_key - 1
@@ -194,17 +326,22 @@ def process_key_worker(args_tuple):
         f"(messages {block_start}...{block_end})"
     )
 
+    out_mode = "a" if start_message_id > 0 else "w"
+    coeff_mode = "a" if start_message_id > 0 else "w"
+
     with open(messages_path, "rb") as messages_fd, \
-        open(part_out, "w", newline="") as out_fd, \
-        open(part_coeff, "w", newline="") as coeff_fd:
+        open(part_out, out_mode, newline="") as out_fd, \
+        open(part_coeff, coeff_mode, newline="") as coeff_fd:
 
         writer = csv.writer(out_fd)
         coeff_writer = csv.writer(coeff_fd)
 
-        writer.writerow(CSV_HEADER)
-        coeff_writer.writerow(COEFF_CSV_HEADER)
+        if out_mode == "w":
+            writer.writerow(CSV_HEADER)
+            coeff_writer.writerow(COEFF_CSV_HEADER)
+            flush_outputs(out_fd, coeff_fd)
 
-        for message_id in range(messages_per_key):
+        for message_id in range(start_message_id, messages_per_key):
             global_message_id = block_start + message_id
             msg = read_message(messages_fd, global_message_id, total_messages)
 
@@ -216,6 +353,8 @@ def process_key_worker(args_tuple):
             )
 
             del msg
+
+            coeff_count = len(stats["coeff_rows"])
 
             write_results_row(
                 writer,
@@ -233,14 +372,26 @@ def process_key_worker(args_tuple):
                 stats["coeff_rows"],
             )
 
-            total_rows += 1
-            total_coeff_rows += len(stats["coeff_rows"])
+            del stats
 
-        out_fd.flush()
-        coeff_fd.flush()
-    
+            total_rows += 1
+            total_coeff_rows += coeff_count
+
+            new_reported = report_progress(
+                total_rows,
+                last_reported,
+                f"messages for key_{key_id:03d}",
+            )
+            if new_reported != last_reported:
+                flush_outputs(out_fd, coeff_fd)
+                gc.collect()
+            last_reported = new_reported
+
+        del key_state
+        flush_outputs(out_fd, coeff_fd)
+
     print(
-        f"processed {messages_per_key}/{messages_per_key} "
+        f"processed {total_rows}/{messages_per_key} "
         f"messages for key_{key_id:03d}"
     )
 
@@ -252,22 +403,105 @@ def process_key_worker(args_tuple):
         "part_coeff": str(part_coeff),
     }
 
-def merge_csv_parts(part_paths, final_path):
-    with open(final_path, "w", newline="") as final_fd:
-        writer = csv.writer(final_fd)
-        wrote_header = False
+def process_key_worker(args_tuple):
+    (
+        key_id,
+        key_dir_str,
+        scheme,
+        messages_path_str,
+        messages_per_key,
+        total_messages,
+        signing_mode,
+        out_path_str,
+        resume,
+    ) = args_tuple
 
-        for part_path in part_paths:
-            with open(part_path, "r", newline="") as part_fd:
-                reader = csv.reader(part_fd)
-                header = next(reader)
+    out_path = Path(out_path_str)
+    _, part_out, part_coeff = key_part_paths(out_path, key_id)
+    mldsa = ML_DSA(SCHEMES[scheme])
 
-                if not wrote_header:
-                    writer.writerow(header)
-                    wrote_header = True
-                
-                for row in reader:
-                    writer.writerow(row)
+    return process_one_key(
+        key_id,
+        Path(key_dir_str),
+        mldsa,
+        scheme,
+        Path(messages_path_str),
+        messages_per_key,
+        total_messages,
+        signing_mode,
+        part_out,
+        part_coeff,
+        resume,
+    )
+
+def ensure_clean_part_state(key_dirs, out_path, resume):
+    part_dir = out_path.parent / f".{out_path.stem}_parts"
+    existing_parts = []
+
+    for key_id, _ in key_dirs:
+        _, part_out, _ = key_part_paths(out_path, key_id)
+        if part_out.exists() and count_csv_data_rows(part_out) > 0:
+            existing_parts.append(part_out)
+
+    if existing_parts and not resume:
+        error(
+            f"found existing part files in {part_dir}; "
+            f"pass --resume to continue or delete that directory"
+        )
+
+    return part_dir
+
+def run_all_keys(args, key_dirs, messages_path, out_path, total_messages):
+    part_dir = ensure_clean_part_state(key_dirs, out_path, args.resume)
+    part_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.resume:
+        print(f"Resume enabled; part files in {part_dir}")
+
+    if args.jobs == 1:
+        mldsa = ML_DSA(SCHEMES[args.scheme])
+        results = []
+
+        for key_id, key_dir in key_dirs:
+            _, part_out, part_coeff = key_part_paths(out_path, key_id)
+            results.append(
+                process_one_key(
+                    key_id,
+                    key_dir,
+                    mldsa,
+                    args.scheme,
+                    messages_path,
+                    args.messages_per_key,
+                    total_messages,
+                    args.signing_mode,
+                    part_out,
+                    part_coeff,
+                    args.resume,
+                )
+            )
+
+        return results
+
+    worker_jobs = min(args.jobs, len(key_dirs))
+    worker_args = [
+        (
+            key_id,
+            str(key_dir),
+            args.scheme,
+            str(messages_path),
+            args.messages_per_key,
+            total_messages,
+            args.signing_mode,
+            str(out_path),
+            args.resume,
+        )
+        for key_id, key_dir in key_dirs
+    ]
+
+    print(f"Using multiprocessing with {worker_jobs} worker processes")
+
+    with Pool(processes=worker_jobs) as pool:
+        return pool.map(process_key_worker, worker_args)
 
 def discover_key_dirs(keys_dir):
     if not keys_dir.exists():
@@ -547,150 +781,38 @@ def main():
             f"got {total_messages}"
         )
     
-    mldsa = ML_DSA(SCHEMES[args.scheme])
     total_rows = 0
     total_coeff_rows = 0
-    last_reported = 0
 
     print(f"Loaded {num_keys} keys")
     print(f"Loaded {total_messages} messages")
     print(f"Signing mode: {args.signing_mode}")
     print(f"Jobs: {args.jobs}")
+    print(f"Resume: {args.resume}")
     print(f"Output: {out_path}")
     print(f"Coefficient output: {coeff_path}")
 
-    if args.jobs == 1:
-        total_rows = 0
-        total_coeff_rows = 0
-        last_reported = 0
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(messages_path, "rb") as messages_fd, \
-            open(out_path, "w", newline="") as out_fd, \
-            open(coeff_path, "w", newline="") as coeff_fd:
+    results = run_all_keys(args, key_dirs, messages_path, out_path, total_messages)
+    results.sort(key=lambda item: item["key_id"])
 
-            writer = csv.writer(out_fd)
-            coeff_writer = csv.writer(coeff_fd)
-            writer.writerow(CSV_HEADER)
-            coeff_writer.writerow(COEFF_CSV_HEADER)
-            out_fd.flush()
-            coeff_fd.flush()
+    validate_run_results(results, key_dirs, args.messages_per_key)
 
-            for key_id, key_dir in key_dirs:
-                sk = load_sk(key_dir, args.scheme)
-                key_state = prepare_key_state(mldsa, sk)
-                del sk
+    part_dir = out_path.parent / f".{out_path.stem}_parts"
+    merge_csv_parts_atomic(
+        [result["part_out"] for result in results],
+        out_path,
+    )
+    merge_csv_parts_atomic(
+        [result["part_coeff"] for result in results],
+        coeff_path,
+    )
 
-                block_start = key_id * args.messages_per_key
-                block_end = block_start + args.messages_per_key - 1
+    cleanup_part_files(results, part_dir)
 
-                print(
-                    f"Processing key_{key_id:03d} "
-                    f"(messages {block_start}...{block_end})"
-                )
-
-                for message_id in range(args.messages_per_key):
-                    global_message_id = block_start + message_id
-                    msg = read_message(messages_fd, global_message_id, total_messages)
-
-                    stats = collect_rejection_stats(
-                        mldsa,
-                        msg,
-                        key_state,
-                        args.signing_mode,
-                    )
-
-                    del msg
-
-                    write_results_row(
-                        writer,
-                        key_id,
-                        message_id,
-                        global_message_id,
-                        stats,
-                    )
-
-                    write_coeff_rows(
-                        coeff_writer,
-                        key_id,
-                        message_id,
-                        global_message_id,
-                        stats["coeff_rows"],
-                    )
-
-                    total_rows += 1
-                    total_coeff_rows += len(stats["coeff_rows"])
-
-                    new_reported = report_progress(
-                        total_rows,
-                        last_reported,
-                        "messages",
-                    )
-                    if new_reported != last_reported:
-                        out_fd.flush()
-                        coeff_fd.flush()
-                    last_reported = new_reported
-
-                del key_state
-                out_fd.flush()
-                coeff_fd.flush()
-
-                print(
-                    f"processed {args.messages_per_key}/{args.messages_per_key} "
-                    f"messages for key_{key_id:03d}"
-                )
-
-            report_final_progress(total_rows, last_reported, "messages")
-            out_fd.flush()
-            coeff_fd.flush()
-
-    else:
-        part_dir = out_path.parent / f".{out_path.stem}_parts"
-        part_dir.mkdir(parents=True, exist_ok=True)
-
-        worker_jobs = min(args.jobs, num_keys)
-
-        worker_args = [
-            (
-                key_id,
-                str(key_dir),
-                args.scheme,
-                str(messages_path),
-                args.messages_per_key,
-                total_messages,
-                args.signing_mode,
-                str(out_path),
-            )
-            for key_id, key_dir in key_dirs
-        ]
-
-        print(f"Using multiprocessing with {worker_jobs} worker processes")
-
-        with Pool(processes=worker_jobs) as pool:
-            results = pool.map(process_key_worker, worker_args)
-
-        results.sort(key=lambda item: item["key_id"])
-
-        total_rows = sum(result["rows"] for result in results)
-        total_coeff_rows = sum(result["coeff_rows"] for result in results)
-
-        merge_csv_parts(
-            [result["part_out"] for result in results],
-            out_path,
-        )
-
-        merge_csv_parts(
-            [result["part_coeff"] for result in results],
-            coeff_path,
-        )
-
-        for result in results:
-            Path(result["part_out"]).unlink()
-            Path(result["part_coeff"]).unlink()
-
-        try:
-            part_dir.rmdir()
-        except OSError:
-            pass
+    total_rows = sum(result["rows"] for result in results)
+    total_coeff_rows = sum(result["coeff_rows"] for result in results)
 
     print(
         f"done ({num_keys} keys, {total_rows} message rows, "
