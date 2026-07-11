@@ -41,10 +41,11 @@ FIRST_REJECTION_REASON = {"none", "z", "r0", "ct0", "hint"}
 COEFF_REASONS = {"z", "r0", "ct0", "hint"}
 COEFF_OUTPUT_REASONS = {"z", "r0", "ct0"}
 
-COEFF_OUTPUT_FILE = "test_first_rejecting_coeff_by_key.csv"
+COEFF_FIRST_ATTEMPT_OUTPUT_FILE = "test_first_rejecting_coeff_by_key_first_attempt.csv"
+COEFF_ALL_ATTEMPTS_OUTPUT_FILE = "test_first_rejecting_coeff_by_key_all_attempts.csv"
 SUM_FIRST_BAD_COEFF_FILE = "test_sum_first_bad_coeff_by_key.csv"
 
-PROGRESS_INTERVAL = 1000
+PROGRESS_INTERVAL = 10000
 
 
 def report_progress(count, last_reported, label):
@@ -317,12 +318,53 @@ def validate_coeff_row(row, row_num):
     return parsed
 
 
-def aggregate_coeff_csv(path, by_key, out_path):
+def increment(mapping, key, value=1):
+    mapping[key] = mapping.get(key, 0) + value
+
+
+def write_coeff_aggregation(counts, denominators, by_key, out_path):
+    rows = []
+
+    for (key_id, reason, coeff_index), count in sorted(counts.items()):
+        ts = by_key[key_id]["total_signatures"]
+        denom = denominators.get((key_id, reason), 0)
+
+        rows.append([
+            key_id,
+            reason,
+            coeff_index,
+            count,
+            denom,
+            ts,
+        ])
+    
+    write_csv(
+        out_path,
+        [
+            "key_id",
+            "reason",
+            "coeff_index",
+            "count",
+            "total_rejections_for_reason",
+            "total_signatures",
+        ],
+        rows,
+    )
+
+
+def aggregate_coeff_csv(path, by_key, first_attempt_out_path, all_attempts_out_path):
     if not path.exists():
         error(f"coefficient input file does not exist: {path}")
 
-    counts = {}
+    first_counts = {}
+    first_denominators = {}
+
+    all_counts = {}
+    all_denominators = {}
+
     row_count = 0
+    used_first_rows = 0
+    used_all_rows = 0
     last_reported = 0
 
     with open(path, newline="") as in_fd:
@@ -331,29 +373,63 @@ def aggregate_coeff_csv(path, by_key, out_path):
 
         for row_num, row in enumerate(reader, start=2):
             parsed = validate_coeff_row(row, row_num)
-            if parsed["reason"] not in COEFF_OUTPUT_REASONS:
-                row_count += 1
+            row_count += 1
+
+            reason = parsed["reason"]
+
+            # Hint has no meaningful coefficient index in this harness,
+            # because first_bad_coeff is stored as -1.
+            if reason not in COEFF_OUTPUT_REASONS:
+                last_reported = report_progress(
+                    row_count, last_reported, "coefficient rows"
+                )
                 continue
 
-            key = (parsed["key_id"], parsed["reason"], parsed["first_bad_coeff"])
-            counts[key] = counts.get(key, 0) + 1
-            row_count += 1
-            last_reported = report_progress(row_count, last_reported, "coefficient rows")
+            key_id = parsed["key_id"]
+            coeff_index = parsed["first_bad_coeff"]
 
+            count_key = (key_id, reason, coeff_index)
+            denom_key = (key_id, reason)
+
+            # Secondary analysis:
+            # count every rejected attempt before acceptance.
+            increment(all_counts, count_key)
+            increment(all_denominators, denom_key)
+            used_all_rows += 1
+
+            # Primary analysis:
+            # count only the first rejection event for this message/signature.
+            if parsed["attempt_id"] == 0:
+                increment(first_counts, count_key)
+                increment(first_denominators, denom_key)
+                used_first_rows += 1
+            
+            last_reported = report_progress(
+                row_count, last_reported, "coefficient rows"
+            )
+    
     report_final_progress(row_count, last_reported, "coefficient rows")
 
-    rows = []
-    for (key_id, reason, coeff_index), count in sorted(counts.items()):
-        ts = by_key[key_id]["total_signatures"]
-        denom = by_key[key_id][f"{reason}_rejections"]
-        rows.append([key_id, reason, coeff_index, count, denom, ts])
-
-    write_csv(
-        out_path,
-        ["key_id", "reason", "coeff_index", "count",
-         "total_rejections_for_reason", "total_signatures"],
-        rows,
+    write_coeff_aggregation(
+        first_counts,
+        first_denominators,
+        by_key,
+        first_attempt_out_path,
     )
+
+    write_coeff_aggregation(
+        all_counts,
+        all_denominators,
+        by_key,
+        all_attempts_out_path,
+    )
+
+    print(
+        f"Coefficient rows read: {row_count}; ",
+        f"first-attempt rows used: {used_first_rows}; ",
+        f"all-attempt rows used: {used_all_rows}; ",
+    )
+
     return row_count
 
 
@@ -377,8 +453,14 @@ def main():
     written.append(SUM_FIRST_BAD_COEFF_FILE)
 
     if coeff_path is not None:
-        aggregate_coeff_csv(coeff_path, by_key, out_dir / COEFF_OUTPUT_FILE)
-        written.append(COEFF_OUTPUT_FILE)
+        aggregate_coeff_csv(
+            coeff_path,
+            by_key,
+            out_dir / COEFF_FIRST_ATTEMPT_OUTPUT_FILE,
+            out_dir / COEFF_ALL_ATTEMPTS_OUTPUT_FILE,
+        )
+        written.append(COEFF_FIRST_ATTEMPT_OUTPUT_FILE)
+        written.append(COEFF_ALL_ATTEMPTS_OUTPUT_FILE)
 
     num_keys = len(by_key)
     total_attempts = sum(s["attempts"] for s in by_key.values())
