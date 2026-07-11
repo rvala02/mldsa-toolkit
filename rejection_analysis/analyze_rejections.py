@@ -27,7 +27,8 @@ INPUT_FILES = {
     "message_rejection": "test_message_rejection_by_key.csv",
     "reason_distribution": "test_rejection_reason_by_key.csv",
     "sum_first_bad_coeff": "test_sum_first_bad_coeff_by_key.csv",
-    "first_coeff": "test_first_rejecting_coeff_by_key.csv",
+    "first_coeff_first_attempt": "test_first_rejecting_coeff_by_key_first_attempt.csv",
+    "first_coeff_all_attempts": "test_first_rejecting_coeff_by_key_all_attempts.csv",
 }
 
 SINGLE_TABLE_HEADER = [
@@ -158,8 +159,8 @@ def parse_args():
     parser.add_argument(
         "--alpha",
         type=float,
-        default=0.01,
-        help="Significance threshold used in report.txt (default: 1e-5)",
+        default=5.7e-7,
+        help="Significance threshold used in report.txt (default: 5.7e-7)",
     )
     parser.add_argument(
         "--summary-only",
@@ -1004,7 +1005,7 @@ def run_test(test_name, input_path, method, reason=None, coeff_index=None, bin_s
 
 
 class BatchAnalysis:
-    def __init__(self, output_dir, method="auto", alpha=0.01, verbose=False, summary_only=False):
+    def __init__(self, output_dir, method="auto", alpha=5.7e-7, verbose=False, summary_only=False):
         self.output = Path(output_dir)
         self.results_dir = self.output / "analysis_results"
         self.method = method
@@ -1061,38 +1062,117 @@ class BatchAnalysis:
             self.method,
         )
 
-        coeff_path = self.input_path("first_coeff")
-        if coeff_path.exists():
-            first_coeff_results = run_test(
-                "first-coeff", coeff_path, self.method,
+        first_coeff_first_attempt_results = []
+        first_coeff_all_attempts_results = []
+        first_coeff_bin_first_attempt_results = []
+        first_coeff_bin_all_attempts_results = []
+
+        first_attempt_coeff_path = self.input_path("first_coeff_first_attempt")
+        if first_attempt_coeff_path.exists():
+            first_coeff_first_attempt_results = run_test(
+                "first-coeff",
+                first_attempt_coeff_path,
+                "chi2",
             )
-            first_coeff_bin_results = run_test(
-                "first-coeff-bins", coeff_path, "chi2",
+            first_coeff_bin_first_attempt_results = run_test(
+                "first-coeff-bins",
+                first_attempt_coeff_path,
+                "chi2",
             )
-        else:
-            first_coeff_results = []
-            first_coeff_bin_results = []
-            if self.verbose:
-                print(f"[i] Skipping first-coeff tests; {coeff_path} not found", file=sys.stderr)
+        elif self.verbose:
+            print(
+                f"[i] Skipping first-attempt first-coeff tests; "
+                f"{first_attempt_coeff_path} not found",
+                file=sys.stderr,
+            )
+
+        all_attempts_coeff_path = self.input_path("first_coeff_all_attempts")
+        if all_attempts_coeff_path.exists():
+            first_coeff_all_attempts_results = run_test(
+                "first-coeff",
+                all_attempts_coeff_path,
+                "chi2",
+            )
+            first_coeff_bin_all_attempts_results = run_test(
+                "first-coeff-bins",
+                all_attempts_coeff_path,
+                "chi2",
+            )
+        elif self.verbose:
+            print(
+                f"[i] Skipping all-attempts first-coeff tests; "
+                f"{all_attempts_coeff_path} not found",
+                file=sys.stderr,
+            )
+
+        first_coeff_results = (
+            first_coeff_first_attempt_results
+            + first_coeff_all_attempts_results
+        )
+
+        first_coeff_bin_results = (
+            first_coeff_bin_first_attempt_results
+            + first_coeff_bin_all_attempts_results
+        )
 
         write_single_results(self.result_path("single_table_results.csv"), single_results)
         self._write_per_test_results(single_results)
+
         blocked_result = blocked_results[0]
         write_blocked_result(self.result_path("blocked_results.csv"), blocked_result)
         write_blocked_result(
             self.result_path("sum_first_bad_coeff_results.csv"), blocked_result,
         )
+
         write_first_coeff_results(
-            self.result_path("first_rejecting_coeff_results.csv"), first_coeff_results,
+            self.result_path("first_rejecting_coeff_first_attempt_results.csv"),
+            first_coeff_first_attempt_results,
         )
         write_first_coeff_results(
-            self.result_path("first_coeff_bin_results.csv"), first_coeff_bin_results,
+            self.result_path("first_rejecting_coeff_all_attempts_results.csv"),
+            first_coeff_all_attempts_results,
         )
-        self.write_report_csv(single_results, blocked_results, first_coeff_results + first_coeff_bin_results)
-        self.write_summary(single_results, blocked_results, first_coeff_results + first_coeff_bin_results)
+        write_first_coeff_results(
+            self.result_path("first_coeff_bin_first_attempt_results.csv"),
+            first_coeff_bin_first_attempt_results,
+        )
+        write_first_coeff_results(
+            self.result_path("first_coeff_bin_all_attempts_results.csv"),
+            first_coeff_bin_all_attempts_results,
+        )
+
+        # Combined files
+        write_first_coeff_results(
+            self.result_path("first_rejecting_coeff_results.csv"),
+            first_coeff_results,
+        )
+        write_first_coeff_results(
+            self.result_path("first_coeff_bin_results.csv"),
+            first_coeff_bin_results,
+        )
+
+        all_first_coeff_related_results = (
+            first_coeff_results
+            + first_coeff_bin_results
+        )
+
+        self.write_report_csv(
+            single_results,
+            blocked_results,
+            all_first_coeff_related_results,
+        )
+        self.write_summary(
+            single_results,
+            blocked_results,
+            all_first_coeff_related_results,
+        )
 
         if not self.summary_only:
-            self.print_results(single_results, blocked_results, first_coeff_results + first_coeff_bin_results)
+            self.print_results(
+                single_results,
+                blocked_results,
+                all_first_coeff_related_results,
+            )
 
         print(f"Analysis written to {self.results_dir}", file=sys.stderr)
         return 0
@@ -1150,38 +1230,224 @@ class BatchAnalysis:
         significant = [r for r in usable if result_p_value(r) < self.alpha]
         min_result = min(usable, key=result_p_value) if usable else None
 
+        coeff_results = [
+            r for r in usable
+            if r.get("test") == "first_rejecting_coeff_by_key"
+        ]
+        coeff_bin_results = [
+            r for r in usable
+            if r.get("test") == "first_coeff_bin_distribution_by_key"
+        ]
+
+        first_attempt_coeff_results = [
+            r for r in coeff_results
+            if "first_attempt" in Path(r.get("input_file", "")).name
+        ]
+        all_attempts_coeff_results = [
+            r for r in coeff_results
+            if "all_attempts" in Path(r.get("input_file", "")).name
+        ]
+
+        first_attempt_bin_results = [
+            r for r in coeff_bin_results
+            if "first_attempt" in Path(r.get("input_file", "")).name
+        ]
+        all_attempts_bin_results = [
+            r for r in coeff_bin_results
+            if "all_attempts" in Path(r.get("input_file", "")).name
+        ]
+
+        significant_coeff_raw = [
+            r for r in coeff_results
+            if result_p_value(r) is not None and result_p_value(r) < self.alpha
+        ]
+        significant_coeff_bonferroni = [
+            r for r in coeff_results
+            if r.get("p_value_bonferroni", "") != ""
+            and float(r["p_value_bonferroni"]) < self.alpha
+        ]
+        significant_coeff_bh_fdr = [
+            r for r in coeff_results
+            if r.get("p_value_bh_fdr", "") != ""
+            and float(r["p_value_bh_fdr"]) < self.alpha
+        ]
+
+        def input_label(result):
+            input_file = Path(result.get("input_file", "")).name
+            if "first_attempt" in input_file:
+                return "first-attempt"
+            if "all_attempts" in input_file:
+                return "all-attempts"
+            return input_file
+
+        def result_label(result):
+            label = result.get("test", "")
+
+            source = input_label(result)
+            if source:
+                label += f" / {source}"
+
+            if result.get("reason", "") != "":
+                label += f" / {result['reason']}"
+            if result.get("coeff_index", "") != "":
+                label += f" / coeff {result['coeff_index']}"
+            if result.get("key_id_a", "") != "":
+                label += f" / keys {result['key_id_a']}-{result['key_id_b']}"
+
+            return label
+
+        def write_top_results(out_fd, title, rows, limit=10):
+            ranked = [
+                r for r in rows
+                if result_p_value(r) is not None
+            ]
+            ranked.sort(key=result_p_value)
+
+            out_fd.write(f"\n{title}:\n")
+            if not ranked:
+                out_fd.write("  none\n")
+                return
+
+            for result in ranked[:limit]:
+                out_fd.write(
+                    f"  {result_label(result)}: "
+                    f"p={format_p_value(result_p_value(result))}"
+                )
+
+                if result.get("p_value_bonferroni", "") != "":
+                    out_fd.write(
+                        f", bonferroni={format_p_value(result['p_value_bonferroni'])}"
+                    )
+
+                if result.get("p_value_bh_fdr", "") != "":
+                    out_fd.write(
+                        f", bh_fdr={format_p_value(result['p_value_bh_fdr'])}"
+                    )
+
+                if result.get("notes", ""):
+                    out_fd.write(f", notes={result['notes']}")
+
+                out_fd.write("\n")
+
+        def count_significant(rows):
+            return len([
+                r for r in rows
+                if result_p_value(r) is not None and result_p_value(r) < self.alpha
+            ])
+
         with open(self.result_path("report.txt"), "w") as out_fd:
             out_fd.write("analyze_rejections.py analysis\n")
             out_fd.write(f"Input directory: {self.output}\n")
             out_fd.write(f"Alpha: {self.alpha}\n")
-            out_fd.write(f"Total signatures: {self.metadata['total_signatures']}\n")
-            out_fd.write(f"Total rejections: {self.metadata['total_rejections']}\n")
-            out_fd.write(f"Tests with p-values: {len(usable)}\n")
-            out_fd.write(f"Significant tests: {len(significant)}\n")
+            out_fd.write(
+                "Significance summary uses raw p-values unless explicitly stated.\n"
+            )
+            out_fd.write(
+                "Per-coefficient CSV outputs also include Bonferroni and "
+                "Benjamini-Hochberg FDR adjusted p-values.\n"
+            )
+            out_fd.write("\n")
+
+            out_fd.write("Dataset summary\n")
+            out_fd.write(f"  Total signatures: {self.metadata['total_signatures']}\n")
+            out_fd.write(f"  Total rejections: {self.metadata['total_rejections']}\n")
+            out_fd.write(f"  Tests with p-values: {len(usable)}\n")
+            out_fd.write(
+                f"  Significant tests using raw p-values: {len(significant)}\n"
+            )
 
             if min_result is not None:
                 out_fd.write(
-                    f"Smallest p-value: {format_p_value(result_p_value(min_result))} "
-                    f"({min_result.get('test', '')})\n"
+                    f"  Smallest raw p-value: "
+                    f"{format_p_value(result_p_value(min_result))} "
+                    f"({result_label(min_result)})\n"
                 )
 
+            out_fd.write("\nCoefficient-test summary\n")
+            out_fd.write(
+                f"  First-attempt coefficient tests: "
+                f"{len(first_attempt_coeff_results)} "
+                f"({count_significant(first_attempt_coeff_results)} raw-significant)\n"
+            )
+            out_fd.write(
+                f"  All-attempt coefficient tests: "
+                f"{len(all_attempts_coeff_results)} "
+                f"({count_significant(all_attempts_coeff_results)} raw-significant)\n"
+            )
+            out_fd.write(
+                f"  First-attempt binned coefficient tests: "
+                f"{len(first_attempt_bin_results)} "
+                f"({count_significant(first_attempt_bin_results)} raw-significant)\n"
+            )
+            out_fd.write(
+                f"  All-attempt binned coefficient tests: "
+                f"{len(all_attempts_bin_results)} "
+                f"({count_significant(all_attempts_bin_results)} raw-significant)\n"
+            )
+            out_fd.write(
+                f"  Per-coefficient tests significant after Bonferroni: "
+                f"{len(significant_coeff_bonferroni)}\n"
+            )
+            out_fd.write(
+                f"  Per-coefficient tests significant after BH-FDR: "
+                f"{len(significant_coeff_bh_fdr)}\n"
+            )
+
+            write_top_results(
+                out_fd,
+                "Top raw p-values across all tests",
+                usable,
+                limit=10,
+            )
+            write_top_results(
+                out_fd,
+                "Top first-attempt coefficient results",
+                first_attempt_coeff_results,
+                limit=10,
+            )
+            write_top_results(
+                out_fd,
+                "Top all-attempt coefficient results",
+                all_attempts_coeff_results,
+                limit=10,
+            )
+            write_top_results(
+                out_fd,
+                "Top first-attempt binned coefficient results",
+                first_attempt_bin_results,
+                limit=10,
+            )
+            write_top_results(
+                out_fd,
+                "Top all-attempt binned coefficient results",
+                all_attempts_bin_results,
+                limit=10,
+            )
+
             if significant:
-                out_fd.write("\nResults below alpha:\n")
-                for result in significant:
-                    label = result.get("test", "")
-                    if result.get("reason", "") != "":
-                        label += f" / {result['reason']}"
-                    if result.get("coeff_index", "") != "":
-                        label += f" / coeff {result['coeff_index']}"
-                    if result.get("key_id_a", "") != "":
-                        label += f" / keys {result['key_id_a']}-{result['key_id_b']}"
+                out_fd.write("\nAll results below alpha using raw p-values:\n")
+                for result in sorted(significant, key=result_p_value):
                     out_fd.write(
-                        f"  {label}: p={format_p_value(result_p_value(result))}\n"
+                        f"  {result_label(result)}: "
+                        f"p={format_p_value(result_p_value(result))}\n"
                     )
             else:
-                out_fd.write("\nNo test produced a p-value below alpha.\n")
+                out_fd.write("\nNo test produced a raw p-value below alpha.\n")
 
-            out_fd.write("\nDetailed CSV report: report.csv")
+            out_fd.write("\nDetailed CSV report: report.csv\n")
+            out_fd.write("Separate coefficient CSV reports:\n")
+            out_fd.write(
+                "  first_rejecting_coeff_first_attempt_results.csv\n"
+            )
+            out_fd.write(
+                "  first_rejecting_coeff_all_attempts_results.csv\n"
+            )
+            out_fd.write(
+                "  first_coeff_bin_first_attempt_results.csv\n"
+            )
+            out_fd.write(
+                "  first_coeff_bin_all_attempts_results.csv\n"
+            )
 
     def print_results(self, single_results, blocked_results, first_coeff_results):
         for result in single_results + blocked_results:
