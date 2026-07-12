@@ -123,6 +123,7 @@ def parse_args():
             "reason-vs-other",
             "reason-distribution",
             "first-coeff",
+            "first-coeff-distribution",
             "sum-first-bad-coeff",
             "first-coeff-bins"
         ],
@@ -764,6 +765,100 @@ def run_first_coeff_bins_test(input_file, rows, method, reason_filter=None, bin_
     return results
 
 
+def run_first_coeff_distribution_test(input_file, rows, method, reason_filter=None):
+    """
+    Run full first-rejecting-coefficient distribution tests by key.
+
+    For each selected rejection reason, build a key-by-coefficient table:
+
+                coeff_0    coeff_1    coeff_2    ...
+        key_0     x00       x01       x02       ...
+        key_1     x10       x11       x12       ...
+        key_2     x20       x21       x22       ...
+        ...       ...       ...       ...       ...
+
+    Then run a chi-square test to check whether the full coefficient
+    distribution differs between keys.
+    """
+
+    results = []
+
+    reasons = sorted({
+        row["reason"]
+        for row in rows
+        if row["reason"] in FIRST_COEFF_REASONS
+        and (reason_filter is None or row["reason"] == reason_filter)
+    })
+
+    for reason in reasons:
+        key_ids = sorted({
+            row["key_id"]
+            for row in rows
+            if row["reason"] == reason
+        })
+
+        coeff_indices = sorted({
+            row["coeff_index"]
+            for row in rows
+            if row["reason"] == reason
+        })
+
+        by_key_coeff = {
+            (key_id, coeff_index): 0
+            for key_id in key_ids
+            for coeff_index in coeff_indices
+        }
+
+        total_signatures_by_key = {}
+
+        for row in rows:
+            if row["reason"] != reason:
+                continue
+
+            key_id = row["key_id"]
+            coeff_index = row["coeff_index"]
+
+            by_key_coeff[(key_id, coeff_index)] += row["count"]
+            total_signatures_by_key[key_id] = row["total_signatures"]
+
+        table_rows = []
+        for key_id in key_ids:
+            table_rows.append({
+                "key_id": key_id,
+                **{
+                    coeff_index: by_key_coeff[(key_id, coeff_index)]
+                    for coeff_index in coeff_indices
+                },
+            })
+        
+        table = build_contingency_table(table_rows, coeff_indices)
+        outcomes = run_contingency_test(table, key_ids, method)
+
+        for outcome in outcomes:
+            results.append({
+                "test": "first_coeff_distribution_by_key",
+                "reason": reason,
+                "coeff_index": "",
+                "total_count": int(table.sum()),
+                "total_denominator": int(table.sum()),
+                "total_signatures": sum(total_signatures_by_key.values()),
+                "input_file": input_file,
+                "p_value_bonferroni": "",
+                "p_value_bh_fdr": "",
+                **outcome,
+                "notes": ";".join(
+                    part for part in [
+                        outcome.get("notes", ""),
+                        f"n_coeffs={len(coeff_indices)}",
+                    ]
+                    if part
+                ),
+            })
+    
+    apply_multiple_testing_corrections(results)
+    return results
+
+
 def apply_multiple_testing_corrections(results):
     runnable = [
         r for r in results
@@ -782,6 +877,7 @@ def apply_multiple_testing_corrections(results):
     order = np.argsort(p_values)
     sorted_p = p_values[order]
     bh_adjusted = np.empty(m, dtype=float)
+
     prev = 1.0
     for i in range(m - 1, -1, -1):
         rank = i + 1
@@ -790,6 +886,7 @@ def apply_multiple_testing_corrections(results):
 
     inverse = np.empty(m, dtype=int)
     inverse[order] = np.arange(m)
+
     for result, idx in zip(runnable, inverse):
         result["p_value_bh_fdr"] = float(bh_adjusted[idx])
 
@@ -994,6 +1091,21 @@ def run_test(test_name, input_path, method, reason=None, coeff_index=None, bin_s
             reason_filter=reason, 
             bin_size=bin_size,
         )
+    
+    if test_name == "first-coeff-distribution":
+        rows = load_aggregated_csv(
+            input_path,
+            [
+                "key_id", "reason", "coeff_index", "count",
+                "total_rejections_for_reason", "total_signatures",
+            ],
+        )
+        return run_first_coeff_distribution_test(
+            input_file,
+            rows,
+            method,
+            reason_filter=reason,
+        )
 
     if test_name == "sum-first-bad-coeff":
         if method == "binom":
@@ -1066,6 +1178,8 @@ class BatchAnalysis:
         first_coeff_all_attempts_results = []
         first_coeff_bin_first_attempt_results = []
         first_coeff_bin_all_attempts_results = []
+        first_coeff_distribution_first_attempt_results = []
+        first_coeff_distribution_all_attempts_results = []
 
         first_attempt_coeff_path = self.input_path("first_coeff_first_attempt")
         if first_attempt_coeff_path.exists():
@@ -1076,6 +1190,11 @@ class BatchAnalysis:
             )
             first_coeff_bin_first_attempt_results = run_test(
                 "first-coeff-bins",
+                first_attempt_coeff_path,
+                "chi2",
+            )
+            first_coeff_distribution_first_attempt_results = run_test(
+                "first-coeff-distribution",
                 first_attempt_coeff_path,
                 "chi2",
             )
@@ -1098,6 +1217,11 @@ class BatchAnalysis:
                 all_attempts_coeff_path,
                 "chi2",
             )
+            first_coeff_distribution_all_attempts_results = run_test(
+                "first-coeff-distribution",
+                all_attempts_coeff_path,
+                "chi2",
+            )
         elif self.verbose:
             print(
                 f"[i] Skipping all-attempts first-coeff tests; "
@@ -1113,6 +1237,11 @@ class BatchAnalysis:
         first_coeff_bin_results = (
             first_coeff_bin_first_attempt_results
             + first_coeff_bin_all_attempts_results
+        )
+
+        first_coeff_distribution_results = (
+            first_coeff_distribution_first_attempt_results
+            + first_coeff_distribution_all_attempts_results
         )
 
         write_single_results(self.result_path("single_table_results.csv"), single_results)
@@ -1140,6 +1269,14 @@ class BatchAnalysis:
             self.result_path("first_coeff_bin_all_attempts_results.csv"),
             first_coeff_bin_all_attempts_results,
         )
+        write_first_coeff_results(
+            self.result_path("first_coeff_distribution_first_attempt_results.csv"),
+            first_coeff_distribution_first_attempt_results,
+        )
+        write_first_coeff_results(
+            self.result_path("first_coeff_distribution_all_attempts_results.csv"),
+            first_coeff_distribution_all_attempts_results,
+        )
 
         # Combined files
         write_first_coeff_results(
@@ -1150,10 +1287,15 @@ class BatchAnalysis:
             self.result_path("first_coeff_bin_results.csv"),
             first_coeff_bin_results,
         )
+        write_first_coeff_results(
+            self.result_path("first_coeff_distribution_results.csv"),
+            first_coeff_distribution_results,
+        )
 
         all_first_coeff_related_results = (
             first_coeff_results
             + first_coeff_bin_results
+            + first_coeff_distribution_results
         )
 
         self.write_report_csv(
@@ -1238,7 +1380,10 @@ class BatchAnalysis:
             r for r in usable
             if r.get("test") == "first_coeff_bin_distribution_by_key"
         ]
-
+        coeff_distribution_results = [
+            r for r in usable
+            if r.get("test") == "first_coeff_distribution_by_key"
+        ]
         first_attempt_coeff_results = [
             r for r in coeff_results
             if "first_attempt" in Path(r.get("input_file", "")).name
@@ -1254,6 +1399,15 @@ class BatchAnalysis:
         ]
         all_attempts_bin_results = [
             r for r in coeff_bin_results
+            if "all_attempts" in Path(r.get("input_file", "")).name
+        ]
+
+        first_attempt_coeff_distribution_results = [
+            r for r in coeff_distribution_results
+            if "first_attempt" in Path(r.get("input_file", "")).name
+        ]
+        all_attempts_coeff_distribution_results = [
+            r for r in coeff_distribution_results
             if "all_attempts" in Path(r.get("input_file", "")).name
         ]
 
@@ -1385,6 +1539,16 @@ class BatchAnalysis:
                 f"({count_significant(all_attempts_bin_results)} raw-significant)\n"
             )
             out_fd.write(
+                f"  First-attempt coefficient distribution tests: "
+                f"{len(first_attempt_coeff_distribution_results)} "
+                f"({count_significant(first_attempt_coeff_distribution_results)} raw-significant)\n"
+            )
+            out_fd.write(
+                f"  All-attempt coefficient distribution tests: "
+                f"{len(all_attempts_coeff_distribution_results)} "
+                f"({count_significant(all_attempts_coeff_distribution_results)} raw-significant)\n"
+            )
+            out_fd.write(
                 f"  Per-coefficient tests significant after Bonferroni: "
                 f"{len(significant_coeff_bonferroni)}\n"
             )
@@ -1423,7 +1587,18 @@ class BatchAnalysis:
                 all_attempts_bin_results,
                 limit=10,
             )
-
+            write_top_results(
+                out_fd,
+                "Top first-attempt coefficient distribution results",
+                first_attempt_coeff_distribution_results,
+                limit=10,
+            )
+            write_top_results(
+                out_fd,
+                "Top all-attempt coefficient distribution results",
+                all_attempts_coeff_distribution_results,
+                limit=10,
+            )
             if significant:
                 out_fd.write("\nAll results below alpha using raw p-values:\n")
                 for result in sorted(significant, key=result_p_value):
@@ -1448,7 +1623,15 @@ class BatchAnalysis:
             out_fd.write(
                 "  first_coeff_bin_all_attempts_results.csv\n"
             )
-
+            out_fd.write(
+                "  first_coeff_distribution_first_attempt_results.csv\n"
+            )
+            out_fd.write(
+                "  first_coeff_distribution_all_attempts_results.csv\n"
+            )
+            out_fd.write(
+                "  first_coeff_distribution_results.csv\n"
+            )
     def print_results(self, single_results, blocked_results, first_coeff_results):
         for result in single_results + blocked_results:
             print(f"Test: {result['test']}", file=sys.stderr)
@@ -1540,7 +1723,11 @@ def main():
         bin_size=args.bin_size,
     )
 
-    if args.test == "first-coeff":
+    if args.test in (
+        "first-coeff",
+        "first-coeff-distribution",
+        "first-coeff-bins",
+    ):
         write_first_coeff_results(args.out, results)
     elif args.test == "sum-first-bad-coeff":
         write_blocked_result(args.out, results[0])
