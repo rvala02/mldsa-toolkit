@@ -1,6 +1,6 @@
 """
 Usage:
-    python key_timing.py -k schedule.bin -d messages.bin -t raw_times.csv -s signatures.bin -m 44|65|87
+    python key_timing.py -k schedule.bin -i messages.bin -t raw_times.csv -o signatures.bin -s 44|65|87
 """
 
 import sys
@@ -35,13 +35,13 @@ def parse_args():
         help="Input schedule.bin file"
     )
     parser.add_argument(
-        "--messages", "-d",
+        "--messages", "-i",
         type=str,
         required=True,
         help="Input messages.bin file"
     )
     parser.add_argument(
-        "--signatures", "-s",
+        "--output", "-o",
         type=str,
         required=True,
         help="Output file for signatures"
@@ -53,7 +53,7 @@ def parse_args():
         help="Output file for raw timing data"
     )
     parser.add_argument(
-        "--scheme", "-m",
+        "--scheme", "-s",
         type=str,
         required=True,
         choices=["44", "65", "87"],
@@ -91,7 +91,7 @@ def main():
                 break
 
             if len(sk) != sk_size or len(m) != MSG_SIZE:
-                print(f"ERROR: Invalid key or message size")
+                print("ERROR: Invalid key or message size")
                 sys.exit(1)
             
             time_before = time.monotonic_ns()

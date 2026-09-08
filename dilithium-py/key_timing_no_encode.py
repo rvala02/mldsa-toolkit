@@ -1,6 +1,6 @@
 """
 Usage:
-    python key_timing_no_encode.py -k schedule.bin -d messages.bin -t raw_times.csv -s signatures.bin -m 44|65|87
+    python key_timing_no_encode.py -k schedule.bin -i messages.bin -t raw_times.csv -o signatures.bin -s 44|65|87
 """
 
 import argparse
@@ -35,13 +35,13 @@ def parse_args():
         help="Input schedule.bin file",
     )
     parser.add_argument(
-        "--messages", "-d",
+        "--messages", "-i",
         type=str,
         required=True,
         help="Input messages.bin file",
     )
     parser.add_argument(
-        "--signatures", "-s",
+        "--signatures", "-o",
         type=str,
         required=True,
         help="Output file for signatures",
@@ -53,7 +53,7 @@ def parse_args():
         help="Output file for raw timing data",
     )
     parser.add_argument(
-        "--scheme", "-m",
+        "--scheme", "-s",
         type=str,
         required=True,
         choices=["44", "65", "87"],
