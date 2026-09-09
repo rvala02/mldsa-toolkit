@@ -13,7 +13,7 @@ import (
 
 func helpMsg() {
 	fmt.Println(`
-rejection_timing.go -i file -t file -k file -n num [-o file] [-e file] [-m scheme]
+./rejection_timing -i file -t file -k file -n num [-o file] [-e file] [-m scheme]
 
 -i file      File with concatenated messages to sign
 -o file      File where to write raw signatures (optional)

@@ -12,7 +12,7 @@ import (
 
 func helpMsg() {
 	fmt.Println(`
-timing.go -i file -o file -k file -m scheme [-s file]
+./timing -i file -o file -k file -m scheme [-s file]
 
 -i file      File with the messages to sign (32 bytes each)
 -o file      File to write the timing data to

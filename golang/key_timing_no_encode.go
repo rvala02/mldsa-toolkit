@@ -11,7 +11,7 @@ import (
 
 func helpMsg() {
 	fmt.Println(`
-key_timing_no_encode.go -i file -o file -t file -k file -n num [-m scheme]
+./key_timing_no_encode -i file -o file -t file -k file -n num [-m scheme]
 
 -i file      File with concatenated messages to sign
 -o file      File where to write raw signatures (concatenated)
