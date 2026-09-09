@@ -33,7 +33,7 @@ Use a Go toolchain that actually ships `crypto/internal/fips140/mldsa`.
 The `timing` harness signs concatenated messages with one ML-DSA private key derived from a 32-byte seed.
 
 ```console
-$ ./timing -i messages.bin -o raw_times.csv -k seed.bin -m 44
+$ ./timing -i messages.bin -o raw_times.csv -k seed.bin -s signatures.bin -m 44
 ```
 
 Arguments:
@@ -42,6 +42,7 @@ Arguments:
 -o file     File where to write timing data 
 -k file     File with a 32-byte ML-DSA key seed 
 -m num      ML-DSA parameter set: 44, 65, or 87
+-s file     File where to write signatures (optional)
 ```
 
 ### Timing without signature encoding
@@ -49,7 +50,7 @@ Arguments:
 The `timing_no_encode` harness is used like `timing`, but stops before the final signature encoding step.
 
 ```
-$ ./timing_no_encode -i messages.bin -o raw_times.csv -k seed.bin -m 44
+$ ./timing_no_encode -i messages.bin -o raw_times.csv -k seed.bin -s signatures.bin -m 44
 ```
 
 ### Timing with per-sample key seeds
@@ -57,7 +58,7 @@ $ ./timing_no_encode -i messages.bin -o raw_times.csv -k seed.bin -m 44
 The `key_timing` harness signs each message with a corresponding ML-DSA private key derived from a concatenated seed file.
 
 ```
-$ ./key_timing -i messages.bin -o sigs.bin -t raw_times.csv -k schedule.bin -n 32 -m 44
+$ ./key_timing -i messages.bin -o sigs.bin -t raw_times.csv -k schedule.bin -s signatures.bin -n 32 -m 44
 ```
 
 Arguments:
@@ -68,6 +69,7 @@ Arguments:
 -k file     File with concatenated 32-byte ML-DSA key seeds 
 -n num      Length of each message in bytes 
 -m num      ML-DSA parameter set: 44, 65, or 87
+-s file     File where to write signatures (optional)
 ```
 
 ### Timing with per-sample key seeds without signature encoding
