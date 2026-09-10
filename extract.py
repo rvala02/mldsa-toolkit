@@ -118,6 +118,10 @@ def help_msg():
     print("                ciphertexts.")
     print(" --ml-dsa-keys FILE Analyse the time based on ML-DSA private key,")
     print("                signatures, and messages (reconstruct intermediates).")
+    print(" --ml-dsa-key-seeds FILE Analyse the time based on per-sample")
+    print("                32-byte ML-DSA key seeds.")
+    print(" --ml-dsa-scheme num ML-DSA parameter set for key-seed mode:")
+    print("                44, 65, or 87.")
     print(" --ml-dsa-sigs FILE Binary file with concatenated ML-DSA signatures.")
     print(" --ml-dsa-msgs FILE Binary file with concatenated ML-DSA messages.")
     print(" --workers num  Number of worker processes to use for")
@@ -186,6 +190,8 @@ def main():
     verbose = False
     ml_kem_keys = None
     ml_dsa_keys = None
+    ml_dsa_key_seeds = None
+    ml_dsa_scheme = None
     ml_dsa_sigs = None
     ml_dsa_msgs = None
 
@@ -205,8 +211,9 @@ def main():
                                 "clock-frequency=", "hash-func=",
                                 "skip-invert", "workers=", "rsa-keys=",
                                 "max-bit-size=", "ml-kem-keys=",
-                                "ml-dsa-keys=", "ml-dsa-sigs=", "ml-dsa-msgs=",
-                                "verbose"])
+                                "ml-dsa-keys=", "ml-dsa-key-seeds=",
+                                "ml-dsa-scheme=", "ml-dsa-sigs=",
+                                "ml-dsa-msgs=", "verbose"])
     for opt, arg in opts:
         if opt == '-l':
             logfile = arg
@@ -254,6 +261,10 @@ def main():
             ml_kem_keys = arg
         elif opt == "--ml-dsa-keys":
             ml_dsa_keys = arg
+        elif opt == "--ml-dsa-key-seeds":
+            ml_dsa_key_seeds = arg
+        elif opt == "--ml-dsa-scheme":
+            ml_dsa_scheme = arg
         elif opt == "--ml-dsa-sigs":
             ml_dsa_sigs = arg
         elif opt == "--ml-dsa-msgs":
@@ -301,7 +312,7 @@ def main():
         raise ValueError(
             "Only 'little' and 'big' endianess supported")
 
-    if not all([any([logfile, sigs, rsa_keys, ml_kem_keys, ml_dsa_keys, values]), output]):
+    if not all([any([logfile, sigs, rsa_keys, ml_kem_keys, ml_dsa_keys, ml_dsa_key_seeds, values]), output]):
         raise ValueError(
             "Specifying either logfile, rsa keys, raw sigs or raw values "
             "and output is mandatory")
@@ -324,11 +335,24 @@ def main():
         raise ValueError(
             "When doing ML-KEM secret extraction, raw values, times, "
             "and logile are necessary.")
+
+    if ml_dsa_keys and ml_dsa_key_seeds:
+        raise ValueError(
+            "Specify only one of --ml-dsa-keys or --ml-dsa-key-seeds.")
     
     if ml_dsa_keys and not all([ml_dsa_sigs, ml_dsa_msgs, raw_times]):
         raise ValueError(
             "When doing ML-DSA intermediate extraction, raw times, " 
             "ml-dsa-keys, ml-dsa-sigs, and ml-dsa-msgs are necessary.")
+
+    if ml_dsa_key_seeds and not all([ml_dsa_sigs, ml_dsa_msgs, raw_times, ml_dsa_scheme]):
+        raise ValueError(
+            "When doing ML-DSA seed-based intermediate extraction, raw times, "
+            "ml-dsa-key-seeds, ml-dsa-scheme, ml-dsa-sigs, and"
+            "ml-dsa-msgs are necessary.")
+
+    if ml_dsa_scheme and ml_dsa_scheme not in ["44", "65", "87"]:
+        raise ValueError("--ml-dsa-scheme must be 44, 65, or 87.")
 
     if hash_func_name == None:
         if prehashed:
@@ -358,6 +382,8 @@ def main():
         value_endianness=value_endianness, max_bit_size=max_bit_size,
         ml_kem_keys=ml_kem_keys,
         ml_dsa_keys=ml_dsa_keys,
+        ml_dsa_key_seeds=ml_dsa_key_seeds,
+        ml_dsa_scheme=ml_dsa_scheme,
         ml_dsa_sigs=ml_dsa_sigs,
         ml_dsa_msgs=ml_dsa_msgs
     )
@@ -386,6 +412,8 @@ def main():
         extract.process_ml_kem_keys()
     if ml_dsa_keys:
         extract.process_ml_dsa_signatures()
+    if ml_dsa_key_seeds:
+        extract.process_ml_dsa_seed_signatures()
 
 
 class LongFormatCSVBlocker(object):
@@ -473,7 +501,9 @@ class Extract:
                  hash_func=hashlib.sha256, workers=None, verbose=False,
                  fin_as_resp=False, rsa_keys=None, sig_format="DER",
                  values=None, value_size=None, value_endianness="little",
-                 max_bit_size=None, ml_kem_keys=None, ml_dsa_keys=None, ml_dsa_sigs=None, ml_dsa_msgs=None):
+                 max_bit_size=None, ml_kem_keys=None, ml_dsa_keys=None,
+                 ml_dsa_key_seeds=None, ml_dsa_scheme=None,
+                 ml_dsa_sigs=None, ml_dsa_msgs=None):
         """
         Initialises instance and sets up class name generator from log.
 
@@ -563,6 +593,8 @@ class Extract:
         self.max_bit_size = max_bit_size
         self.ml_kem_keys = ml_kem_keys
         self.ml_dsa_keys = ml_dsa_keys
+        self.ml_dsa_key_seeds = ml_dsa_key_seeds
+        self.ml_dsa_scheme = ml_dsa_scheme
         self.ml_dsa_sigs = ml_dsa_sigs
         self.ml_dsa_msgs = ml_dsa_msgs
 
@@ -2204,6 +2236,7 @@ class Extract:
             "tr": tr,
             "s1": s1,
             "s2": s2,
+            "t0": t0,
             "s1_hat": s1.to_ntt(),
             "s2_hat": s2.to_ntt(),
             "t0_hat": t0.to_ntt(),
@@ -2219,12 +2252,40 @@ class Extract:
         rho = ctx["rho"]
         k = ctx["k"]
         tr = ctx["tr"]
+        s1 = ctx["s1"]
+        s2 = ctx["s2"]
+        t0 = ctx["t0"]
         A_hat = ctx["A_hat"]
         s1_hat = ctx["s1_hat"]
         s2_hat = ctx["s2_hat"]
         q = ctx["q"]
 
         values = {}
+
+        # key-dependent features
+        s1_hw = 0
+        s1_bits = 0
+        for c0 in self._iter_vector_coeffs(s1):
+            s1_hw += bit_count(c0)
+            s1_bits += bit_length(c0)
+        values["hw-s1"] = s1_hw
+        values["bit-size-s1"] = s1_bits
+
+        s2_hw = 0
+        s2_bits = 0
+        for c0 in self._iter_vector_coeffs(s2):
+            s2_hw += bit_count(c0)
+            s2_bits += bit_length(c0)
+        values["hw-s2"] = s2_hw
+        values["bit-size-s2"] = s2_bits
+
+        t0_hw = 0
+        t0_bits = 0
+        for c0 in self._iter_vector_coeffs(t0):
+            t0_hw += bit_count(c0)
+            t0_bits += bit_length(c0)
+        values["hw-t0"] = t0_hw
+        values["bit-size-t0"] = t0_bits
 
         c_tilde, z, _h = scheme._unpack_sig(sig)
 
@@ -2362,6 +2423,86 @@ class Extract:
 
         return values
 
+    def _ml_dsa_scheme_from_name(self, scheme_name):
+        from dilithium_py.ml_dsa.ml_dsa import ML_DSA
+        from dilithium_py.ml_dsa.default_parameters import DEFAULT_PARAMETERS
+
+        params = {
+            "44": DEFAULT_PARAMETERS["ML_DSA_44"],
+            "65": DEFAULT_PARAMETERS["ML_DSA_65"],
+            "87": DEFAULT_PARAMETERS["ML_DSA_87"],
+        }
+
+        if scheme_name not in params:
+            raise ValueError("Unknown ML-DSA scheme: {0}".format(scheme_name))
+
+        return ML_DSA(params[scheme_name])
+
+    def _ml_dsa_signature_size_from_scheme(self, scheme_name):
+        sig_sizes = {
+            "44": 2420,
+            "65": 3309,
+            "87": 4627,
+        }
+
+        if scheme_name not in sig_sizes:
+            raise ValueError("Unknown ML-DSA scheme: {0}".format(scheme_name))
+
+        return sig_sizes[scheme_name]
+
+    def _ml_dsa_signature_size_from_sk_size(self, sk_size):
+        if sk_size == 2560:
+            return 2420
+        if sk_size == 4032:
+            return 3309
+        if sk_size == 4896:
+            return 4627
+
+        raise ValueError("Unknown ML-DSA key size: {0}".format(sk_size))
+
+    def _ml_dsa_value_names(self):
+        return {
+            "hw-s1": {"window": 17},
+            "bit-size-s1": {"window": 17},
+            "hw-s2": {"window": 17},
+            "bit-size-s2": {"window": 17},
+            "hw-t0": {"window": 17},
+            "bit-size-t0": {"window": 17},
+            "hw-rho-prime": {"window": 17},
+            "bit-size-rho-prime": {"window": 17},
+            "rho-prime-n-zero": {"window": 17},
+            "hw-y": {"window": 17},
+            "bit-size-y": {"window": 17},
+            "y-n-zero": {"window": 17},
+            "y-n-need-reduction": {"window": 17},
+            "y-n-fully-low-bit": {"window": 17},
+            "y-n-above-low-bit-cutoff": {"window": 17},
+            "ntt-hw-y": {"window": 17},
+            "ntt-bit-size-y": {"window": 17},
+            "hw-w": {"window": 17},
+            "bit-size-w": {"window": 17},
+            "w-n-zero": {"window": 17},
+            "w-n-need-reduction": {"window": 17},
+            "w-n-fully-low-bit": {"window": 17},
+            "w-n-above-low-bit-cutoff": {"window": 17},
+            "ntt-hw-w": {"window": 17},
+            "ntt-bit-size-w": {"window": 17},
+            "hw-c-s1": {"window": 17},
+            "bit-size-c-s1": {"window": 17},
+            "c-s1-n-zero": {"window": 17},
+            "c-s1-n-need-reduction": {"window": 17},
+            "ntt-hw-c-s1": {"window": 17},
+            "ntt-bit-size-c-s1": {"window": 17},
+            "hw-c-s2": {"window": 17},
+            "bit-size-c-s2": {"window": 17},
+            "c-s2-n-zero": {"window": 17},
+            "c-s2-n-need-reduction": {"window": 17},
+            "ntt-hw-c-s2": {"window": 17},
+            "ntt-bit-size-c-s2": {"window": 17},
+            "hw-w0": {"window": 17},
+            "bit-size-w0": {"window": 17},
+        }   
+
     def process_ml_dsa_signatures(self):
 
         if not self.ml_dsa_keys or not self.ml_dsa_sigs or not self.ml_dsa_msgs:
@@ -2480,6 +2621,103 @@ class Extract:
 
             if ml_dsa_keys:
                 ml_dsa_keys.close()
+            if sigs_fp:
+                sigs_fp.close()
+            if msgs_fp:
+                msgs_fp.close()
+
+            for i in measurements.values():
+                if i:
+                    i.close()
+
+    def process_ml_dsa_seed_signatures(self):
+
+        if not self.ml_dsa_key_seeds or not self.ml_dsa_sigs or \
+            not self.ml_dsa_msgs or not self.ml_dsa_scheme:
+            raise ValueError(
+                "Missing ML-DSA seed-mode inputs "
+                "(key-seeds/sigs/msgs/scheme)."
+            )
+
+        key_seeds_fp = None
+        sigs_fp = None
+        msgs_fp = None
+        measurements = {}
+
+        times_iterator = self._get_time_from_file()
+        progress = None
+        status = None
+
+        value_names = self._ml_dsa_value_names()
+        scheme = self._ml_dsa_scheme_from_name(self.ml_dsa_scheme)
+        sig_size = self._ml_dsa_signature_size_from_scheme(self.ml_dsa_scheme)
+        msg_size = self.data_size if self.data_size else 32
+        seed_size = 32
+
+        try:
+            for name, params in value_names.items():
+                f_name = join(self.output, "measurements-{0}.csv".format(name))
+                measurements[name] = LongFormatCSVBlocker(f_name, **params)
+
+            key_seeds_fp = open(self.ml_dsa_key_seeds, "rb")
+            sigs_fp = open(self.ml_dsa_sigs, "rb")
+            msgs_fp = open(self.ml_dsa_msgs, "rb")
+
+            sigs_fp.seek(0,2)
+            exp_len = sigs_fp.tell()
+            sigs_fp.seek(0,0)
+            status = [0, exp_len, Event()]
+            if self.verbose:
+                kwargs = {"unit": "B", "prefix": "binary", "delay": self.delay, 
+                          "end": self.carriage_return}
+                progress = Thread(target=progress_report, args=(status,),
+                                  kwargs=kwargs)
+                progress.start()
+
+            while True:
+                seed = key_seeds_fp.read(seed_size)
+                sig = sigs_fp.read(sig_size)
+                status[0] = sigs_fp.tell()
+                msg = msgs_fp.read(msg_size)
+
+                if not seed and not sig and not msg:
+                    break
+
+                if not seed or len(seed) != seed_size:
+                    raise ValueError("Incomplete ML-DSA key seed in input file.")
+
+                if not sig or len(sig) != sig_size:
+                    raise ValueError("Incomplete ML-DSA signature in input file.")
+
+                if not msg or len(msg) != msg_size:
+                    raise ValueError("Incomplete ML-DSA message in input file.")
+
+                _, sk = scheme.key_derive(seed)
+                ctx = self._prepare_ml_dsa_context(scheme, sk)
+
+                feats = self._ml_dsa_reconstruct_intermediates(
+                    ctx, sig, msg, external_mu=False, deterministic=True
+                )
+
+                try:
+                    v_time = next(times_iterator)
+                except StopIteration:
+                    raise ValueError(
+                        "Insufficient number of timing samples for ML-DSA inputs."
+                    )
+
+                for k_name, v_val in feats.items():
+                    if k_name in measurements:
+                        measurements[k_name].add(v_val, v_time)
+        finally:
+            if status:
+                status[2].set()
+            if progress:
+                progress.join()
+            print()
+
+            if key_seeds_fp:
+                key_seeds_fp.close()
             if sigs_fp:
                 sigs_fp.close()
             if msgs_fp:
