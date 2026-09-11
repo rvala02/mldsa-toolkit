@@ -1,6 +1,7 @@
 """
 Usage:
     python create_folders.py -o output_dir
+    python create_folders.py -o output_dir -r
 """
 import argparse
 from pathlib import Path
@@ -10,6 +11,7 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description="Create folder setup for timing analysis")
     parser.add_argument("-o", "--output-dir", type=str, help="Output directory")
+    parser.add_argument("-r", "--rejection-test", action="store_true", help="Include key features: s1, s2, and t0")
     args = parser.parse_args()
 
     if args.output_dir is None:
@@ -56,6 +58,16 @@ def main():
         "ntt-bit-size-c-s2",
         "hw-w0",
         "bit-size-w0",
+        )
+
+    if args.rejection_test:
+        properties += (
+            "hw-s1",
+            "bit-size-s1",
+            "hw-s2",
+            "bit-size-s2",
+            "hw-t0",
+            "bit-size-t0"
         )
 
     for property in properties:
