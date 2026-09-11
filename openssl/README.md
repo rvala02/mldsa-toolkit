@@ -17,6 +17,7 @@ $ gcc -o timing_no_encode timing_no_encode.c -lcrypto
 $ gcc -o key_timing key_timing.c -lcrypto
 $ gcc -o key_timing_no_encode key_timing_no_encode.c -lcrypto
 $ gcc -o rejection_timing rejection_timing.c -lcrypto
+$ gcc -o rejection_timing_no_encode rejection_timing_no_encode.c -lcrypto
 ```
 
 If OpenSSL is installed in a custom prefix, add `-I.../include`, `-L.../lib`, and
@@ -98,8 +99,18 @@ Arguments:
 
 The `-e` option can be used to verify that OpenSSL produces the same deterministic signatures as the generator. If `-o` is provided, the produced signatures are written to that file. If `-o` is ommited, only timing data is written.
 
+### Timing rejection-window test vectors without signature encoding
+
+The `rejection_timing_no_encode` harness is used like `rejection_timing`, but excludes the final signature encoding step from the measured operation.
+
+```
+$ ./rejection_timing_no_encode -i messages.bin -k keys.bin -e signatures.bin -t raw_times.bin -n 32 -s 44
+```
+
 ## Limitations
 
 Timing output on `-t` is **binary** (8 bytes per sample), not the text
 `raw times` format. Use `extract.py` with `--binary 8` (and set
 `--clock-frequency` appropriately for cycle counters) when classifying.
+
+The `timing_no_encode`, `key_timing_no_encode`, and `rejection_timing_no_encode` harnesses depend on a patched OpenSSL build that records the internal ML-DSA signing-core timing in `ossl_ml_dsa_last_core_cycles`.
