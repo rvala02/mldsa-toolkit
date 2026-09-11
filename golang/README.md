@@ -21,6 +21,7 @@ $ go build -o timing_no_encode timing_no_encode.go
 $ go build -o key_timing key_timing.go
 $ go build -o key_timing_no_encode key_timing_no_encode.go
 $ go build -o rejection_timing rejection_timing.go
+$ go build -o rejection_timing rejection_timing.go
 ```
 
 Use a Go toolchain that actually ships `crypto/internal/fips140/mldsa`.
@@ -98,6 +99,16 @@ Arguments:
 
 The `-e` option can be used to verify that Go produces the same deterministic signatures as the generator. If `-o` is provided, the produced signatures are written to that file. If `-o` is omitted, only timing data is written.
 
+### Timing rejection-window test vectors without signature encoding
+
+The `rejection_timing_no_encode` harness is used like `rejection_timing`, but excludes the final signature encoding step from the measured operation.
+
+```
+$ ./rejection_timing_no_encode -i messages.bin -k keys.bin -e signatures.bin -t raw_times.csv -n 32 -m 44
+```
+
 ## Limitations
 
-Keys must be **32-byte binary seeds** (what `NewPrivateKey*` accepts). There is no PEM support in these tools. The `*_no_encode` programs expect a modified `SignDeterministic` with an extra return value.
+Keys must be **32-byte binary seeds** (what `NewPrivateKey*` accepts). 
+
+The `*_no_encode` programs expect a patched `SignDeterministic` that returns an extra timing value for the internal signing core.

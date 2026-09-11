@@ -8,18 +8,17 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 )
 
 func helpMsg() {
 	fmt.Println(`
-rejection_timing.go -i file -t file -k file -n num [-o file] [-e file] [-m scheme]
+rejection_timing_no_encode.go -i file -t file -k file -n num [-o file] [-e file] [-m scheme]
 
 -i file      File with concatenated messages to sign
 -o file      File where to write raw signatures (optional)
 -t file      File where to write timing data
 -k file      File with concatenated 32-byte key seeds
--e file		 File with expected deterministic signatures (optional)
+-e file      File with expected deterministic signatures (optional)
 -n num       Length of each message in bytes
 -m scheme    ML-DSA parameter set: 44, 65, or 87 (default: 44)
 -h | --help  This message
@@ -164,7 +163,7 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Fprintf(os.Stderr, "Error reading message: %v\n", err)
-			break
+			os.Exit(1)
 		}
 
 		privKey, err := newPrivateKey(seedBuf)
@@ -173,10 +172,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		start := time.Now()
-		sig, err := mldsa.SignDeterministic(privKey, msgBuf, "")
-		diff := time.Since(start).Nanoseconds()
-
+		sig, diff, err := mldsa.SignDeterministic(privKey, msgBuf, "")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error signing: %v\n", err)
 			os.Exit(1)
