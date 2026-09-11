@@ -1,6 +1,6 @@
 """
 Usage:
-    python rejection_timing.py -k schedule.bin -i messages.bin -t raw_times.csv -o signatures.bin -s 44|65|87
+    python key_timing.py -k schedule.bin -i messages.bin -t raw_times.csv -o signatures.bin -s 44|65|87
 """
 
 import argparse
@@ -22,7 +22,7 @@ MSG_SIZE = 32
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="ML-DSA rejection-timing harness"
+        description="ML-DSA rejection-timing harness (no_encode)"
     )
     parser.add_argument(
         "--keys", "-k",
@@ -116,11 +116,8 @@ def main():
 
             _, sk = scheme.key_derive(seed)
             
-            time_before = time.monotonic_ns()
             sig = scheme.sign(sk, m, deterministic=True)
-            time_after = time.monotonic_ns()
-            
-            time_diff = time_after - time_before
+            time_diff = scheme._last_time
 
             if expected_sig_fd is not None:
                 expected_sig = expected_sig_fd.read(len(sig))
