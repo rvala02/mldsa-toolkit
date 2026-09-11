@@ -78,3 +78,15 @@ Arguments:
 ```
 
 The `-e` option can be used to verify that `dilithium-py` produces the same deterministic signatures as the generator. If `-o` is provided, the produced signatures are written to that file. If `-o` is omitted, only timing data is written.
+
+### Timing rejection-window test vectors without signature encoding
+
+The `rejection_timing_no_encode` harness is used like `rejection_timing`, but excludes the final signature encoding step from the measured operation.
+
+```
+$ python3 rejection_timing_no_encode.py -k keys.bin -i messages.bin -e signatures.bin -t raw_times.csv -s 44
+```
+
+## Limitations
+
+The `*_no_encode.py` scripts require a patched dilithium-py implementation that records the internal signing-core timing in scheme._last_time.
