@@ -21,7 +21,7 @@ $ go build -o timing_no_encode timing_no_encode.go
 $ go build -o key_timing key_timing.go
 $ go build -o key_timing_no_encode key_timing_no_encode.go
 $ go build -o rejection_timing rejection_timing.go
-$ go build -o rejection_timing rejection_timing.go
+$ go build -o rejection_timing_no_encode rejection_timing_no_encode.go
 ```
 
 Use a Go toolchain that actually ships `crypto/internal/fips140/mldsa`.
