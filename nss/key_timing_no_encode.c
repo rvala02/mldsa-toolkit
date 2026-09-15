@@ -1,9 +1,3 @@
-/*
- * Timing per sample is nss_ml_dsa_last_core_cycles from instrumented libfreebl:
- * get_time_after() - get_time_before(), with time_before at sign API entry and
- * time_after immediately before pack_sig (encoding).
- */
-
 #include <memory.h>
 #include <string.h>
 #include <stdio.h>
@@ -37,8 +31,7 @@ static void help(const char *name) {
     fprintf(stderr, " -h         This message\n");
 }
 
-int
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
     int result = 1;
     int opt;
