@@ -14,7 +14,6 @@
 #include <keyhi.h>
 #include <keythi.h>
 #include <nss.h>
-#include <blapi.h>
 
 #include "readpem.h"
 
@@ -33,16 +32,6 @@ static void help(const char *name) {
     fprintf(stderr, " -n num     Length of individual messages in bytes\n");
     fprintf(stderr, " -s num     ML-DSA parameter set: 44, 65, or 87 (default: 44)\n");
     fprintf(stderr, " -h         This message\n");
-}
-
-static CK_ML_DSA_PARAMETER_SET_TYPE get_param_set(int mldsa_level)
-{
-    switch (mldsa_level) {
-        case 44: return CKP_ML_DSA_44;
-        case 65: return CKP_ML_DSA_65;
-        case 87: return CKP_ML_DSA_87;
-        default: return (CK_ML_DSA_PARAMETER_SET_TYPE)0;
-    }
 }
 
 static size_t get_signature_len(int mldsa_level)
@@ -84,11 +73,6 @@ int main(int argc, char *argv[])
 
     SECKEYPrivateKey *pkey = NULL;
 
-    MLDSAPrivateKey raw_priv;
-    MLDSAPublicKey raw_pub;
-    CK_ML_DSA_PARAMETER_SET_TYPE param_set;
-    SECItem seed_item;
-
     CK_SIGN_ADDITIONAL_CONTEXT sign_params;
     SECItem mech_param;
 
@@ -118,7 +102,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    param_set = get_param_set(mldsa_level);
     sig_len = get_signature_len(mldsa_level);
 
     if (sig_len == 0) {
@@ -198,31 +181,18 @@ int main(int argc, char *argv[])
             goto err;
         }
 
-        memset(&raw_priv, 0, sizeof(raw_priv));
-        memset(&raw_pub, 0, sizeof(raw_pub));
-
-        seed_item.type = siBuffer;
-        seed_item.data = seed_buf;
-        seed_item.len = SEED_LEN;
-
-        if (MLDSA_NewKey(param_set, &seed_item, &raw_priv, &raw_pub) != SECSuccess) {
-            fprintf(stderr, "MLDSA_NewKey() failed\n");
-            goto err;
-        }
-
         if (pkey) {
             SECKEY_DestroyPrivateKey(pkey);
             pkey = NULL;
         }
 
-        pkey = import_raw_PrivateKey(
-            raw_priv.keyVal,
-            raw_priv.keyValLen,
-            mldsa_level
-        );
+        pkey = import_seed_PrivateKey(seed_buf, SEED_LEN, mldsa_level);
 
         if (!pkey) {
-            fprintf(stderr, "import_raw_PrivateKey() failed\n");
+            fprintf(stderr, "import_seed_PrivateKey() failed\n");
+            int errcode = PORT_GetError();
+            if (errcode)
+                fprintf(stderr, "%s (%d)\n", PORT_ErrorToString(errcode), errcode);
             goto err;
         }
 

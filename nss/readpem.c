@@ -427,3 +427,60 @@ loser:
     if (asciiDerPKI) PORT_Free(asciiDerPKI);
     return NULL;
 }
+
+SECKEYPrivateKey *
+import_seed_PrivateKey(const unsigned char *seed_buf, size_t seed_len, int mldsa_level)
+{
+    CK_BBOOL cktrue  = CK_TRUE;
+    CK_BBOOL ckfalse = CK_FALSE;
+    CK_OBJECT_CLASS keyClass = CKO_PRIVATE_KEY;
+    CK_KEY_TYPE keyType = CKK_ML_DSA;
+    CK_ML_DSA_PARAMETER_SET_TYPE paramSet;
+    CK_ATTRIBUTE theTemplate[10];
+    CK_ATTRIBUTE *attrs = theTemplate;
+    PK11SlotInfo *slot = NULL;
+    PK11GenericObject *genObj = NULL;
+    SECKEYPrivateKey *privKey = NULL;
+
+    switch (mldsa_level) {
+        case 44: paramSet = CKP_ML_DSA_44; break;
+        case 65: paramSet = CKP_ML_DSA_65; break;
+        case 87: paramSet = CKP_ML_DSA_87; break;
+        default:
+            PORT_SetError(SEC_ERROR_BAD_KEY);
+            return NULL;
+    }
+
+    if (seed_len != 32) {
+        PORT_SetError(SEC_ERROR_BAD_KEY);
+        return NULL;
+    }
+
+    PK11_SETATTRS(attrs, CKA_CLASS,         &keyClass,  sizeof(keyClass)); attrs++;
+    PK11_SETATTRS(attrs, CKA_KEY_TYPE,      &keyType,   sizeof(keyType)); attrs++;
+    PK11_SETATTRS(attrs, CKA_TOKEN,         &ckfalse,   sizeof(CK_BBOOL)); attrs++;
+    PK11_SETATTRS(attrs, CKA_SENSITIVE,     &ckfalse,   sizeof(CK_BBOOL)); attrs++;
+    PK11_SETATTRS(attrs, CKA_PRIVATE,       &ckfalse,   sizeof(CK_BBOOL)); attrs++;
+    PK11_SETATTRS(attrs, CKA_SIGN,          &cktrue,    sizeof(CK_BBOOL)); attrs++;
+    PK11_SETATTRS(attrs, CKA_PARAMETER_SET, (unsigned char *)&paramSet,
+                  sizeof(CK_ML_DSA_PARAMETER_SET_TYPE)); attrs++;
+
+    PK11_SETATTRS(attrs, CKA_SEED, (unsigned char *)seed_buf, seed_len); attrs++;
+
+    slot = PK11_GetInternalSlot();
+    if (!slot)
+        return NULL;
+
+    genObj = PK11_CreateGenericObject(slot, theTemplate, attrs - theTemplate, PR_FALSE);
+    if (!genObj) {
+        PK11_FreeSlot(slot);
+        return NULL;
+    }
+
+    CK_OBJECT_HANDLE objectID = PK11_GetObjectHandle(PK11_TypeGeneric, genObj, NULL);
+    privKey = pk11_MakePrivKey(slot, mldsaKey, PR_TRUE, objectID, NULL);
+
+    PK11_DestroyGenericObject(genObj);
+    PK11_FreeSlot(slot);
+    return privKey;
+}
