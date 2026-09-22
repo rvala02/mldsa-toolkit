@@ -19,7 +19,7 @@
 
 #define SEED_LEN 32
 
-extern uint64_t nss_ml_dsa_last_core_cycles;
+extern uint64_t MLDSA_GetLastCoreCycles(void);
 
 static void help(const char *name) {
     fprintf(stderr, "Usage: %s -i file -t file -k file -n num [-o file] [-e file] [-s num] [-h]\n", name);
@@ -211,7 +211,7 @@ int main(int argc, char *argv[])
             goto err;
         }
 
-        cycles = nss_ml_dsa_last_core_cycles;
+        cycles = MLDSA_GetLastCoreCycles();
 
         if (expected_sig_fd >= 0) {
             ssize_t e_ret = read(expected_sig_fd, expected_sig_buf, sig_len);
