@@ -171,6 +171,11 @@ def parse_args():
         help="Number of test cases per rejection-count window. Default: 17",
     )
     parser.add_argument(
+        "--fixed-key",
+        action="store_true",
+        help="Use one key for all generated candidates."
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite existing output files in the output directory.",
@@ -281,12 +286,20 @@ def sign_and_count_rejections(mldsa, msg, key_state):
         rejections += 1
 
 
-def generate_one_candidate(mldsa):
-    seed = os.urandom(SEED_SIZE)
-    _pk, sk = mldsa.key_derive(seed)
+def generate_one_candidate(
+    mldsa,
+    fixed_seed=None,
+    fixed_key_state=None,
+    ):
+    if fixed_seed is None:
+        seed = os.urandom(SEED_SIZE)
+        _pk, sk = mldsa.key_derive(seed)
+        key_state = prepare_key_state(mldsa, sk)
+    else:
+        seed = fixed_seed
+        key_state = fixed_key_state
+    
     msg = os.urandom(MSG_SIZE)
-
-    key_state = prepare_key_state(mldsa, sk)
     signature, num_rejections = sign_and_count_rejections(mldsa, msg, key_state)
 
     return num_rejections, seed, msg, signature
@@ -336,6 +349,20 @@ def generate_vectors(args):
 
     mldsa = ML_DSA(SCHEMES[args.scheme])
     sig_size = mldsa._sig_size()
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+
+    fixed_seed = None
+    fixed_key_state = None
+    
+    if args.fixed_key:
+        fixed_seed = os.urandom(SEED_SIZE)
+        _pk, fixed_sk = mldsa.key_derive(fixed_seed)
+        fixed_key_state = prepare_key_state(mldsa, fixed_sk)
+
+        seed_path = args.out_dir / "seed.bin"
+        seed_path.write_bytes(fixed_seed)
+    
     buckets = defaultdict(list)
     output = WindowOutput(
         path=args.out_dir,
@@ -355,7 +382,11 @@ def generate_vectors(args):
     candidates = 0
     try:
         for _ in range(args.num_signatures):
-            candidate = generate_one_candidate(mldsa)
+            candidate = generate_one_candidate(
+                mldsa,
+                fixed_seed=fixed_seed,
+                fixed_key_state=fixed_key_state,
+            )
             candidates += 1
             buffer_candidate(buckets, output, args.window_size, candidate)
 

@@ -1,4 +1,5 @@
 import csv
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,25 +15,34 @@ from dilithium_py.ml_dsa.ml_dsa import ML_DSA
 SCRIPT = Path("scripts/rejection_tc_generator.py")
 ML_DSA_SCHEMES = ["44", "65", "87"]
 
-def run_generator(out_dir, num_signatures=1000, window_size=5, scheme="44"):
-    subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "-s",
-            scheme,
-            "-o",
-            str(out_dir),
-            "-n",
-            str(num_signatures),
-            "-w",
-            str(window_size),
-            "--force",
-            "-p",
-            str(num_signatures),
-        ],
-        check=True,
-    )
+def run_generator(
+    out_dir, 
+    num_signatures=1000, 
+    window_size=5, 
+    scheme="44",
+    fixed_key=False,
+    ):
+    
+    cmd = [
+        sys.executable,
+        str(SCRIPT),
+        "-s",
+        scheme,
+        "-o",
+        str(out_dir),
+        "-n",
+        str(num_signatures),
+        "-w",
+        str(window_size),
+        "--force",
+        "-p",
+        str(num_signatures),
+    ]
+    
+    if fixed_key:
+        cmd.append("--fixed-key")
+
+    subprocess.run(cmd, check=True)
 
 
 def make_candidate(num_rejections, seed_byte, msg_byte, sig_byte):
@@ -413,3 +423,173 @@ def test_e2e_recomputed_rejection_counts_match_windows_csv(tmp_path, scheme):
 
         assert actual_rejections == expected_rejections
         assert signature == signatures[index]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("scheme", ML_DSA_SCHEMES)
+def test_fixed_key_seed_is_reused(tmp_path, scheme):
+    out_dir = tmp_path / "vectors"
+
+    run_generator(
+        out_dir,
+        num_signatures=100,
+        window_size=5,
+        scheme=scheme,
+        fixed_key=True,
+    )
+
+    seed_file = out_dir / "seed.bin"
+    keys_file = out_dir / "keys.bin"
+
+    assert seed_file.exists()
+    assert seed_file.stat().st_size == gen.SEED_SIZE
+
+    fixed_seed = seed_file.read_bytes()
+    stored_seeds = read_records(keys_file, gen.SEED_SIZE)
+
+    assert stored_seeds
+    assert all(seed == fixed_seed for seed in stored_seeds)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("scheme", ML_DSA_SCHEMES)
+def test_fixed_key_signatures_verify(tmp_path, scheme):
+    out_dir = tmp_path / "vectors"
+
+    run_generator(
+        out_dir,
+        num_signatures=100,
+        window_size=5,
+        scheme=scheme,
+        fixed_key=True,
+    )
+
+    mldsa = get_mldsa(scheme)
+    sig_size = mldsa._sig_size()
+
+    fixed_seed = (out_dir / "seed.bin").read_bytes()
+    pk, _sk = mldsa.key_derive(fixed_seed)
+
+    messages = read_records(
+        out_dir / "messages.bin",
+        gen.MSG_SIZE,
+    )
+    signatures = read_records(
+        out_dir / "signatures.bin",
+        sig_size,
+    )
+
+    assert len(messages) == len(signatures)
+    assert len(messages) > 0
+
+    sample_indexes = sorted(
+        {0, len(messages) // 2, len(messages) - 1}
+    )
+
+    for index in sample_indexes:
+        assert verify_clean(
+            mldsa,
+            pk,
+            messages[index],
+            signatures[index],
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("scheme", ML_DSA_SCHEMES)
+def test_fixed_key_signatures_match_clean_deterministic_signing(tmp_path, scheme):
+    out_dir = tmp_path / "vectors"
+
+    run_generator(
+        out_dir,
+        num_signatures=100,
+        window_size=5,
+        scheme=scheme,
+        fixed_key=True,
+    )
+
+    mldsa = get_mldsa(scheme)
+    sig_size = mldsa._sig_size()
+
+    fixed_seed = (out_dir / "seed.bin").read_bytes()
+    _pk, sk = mldsa.key_derive(fixed_seed)
+
+    messages = read_records(
+        out_dir / "messages.bin",
+        gen.MSG_SIZE,
+    )
+
+    signatures = read_records(
+        out_dir / "signatures.bin",
+        sig_size,
+    )
+
+    assert len(messages) == len(signatures)
+    assert len(messages) > 0
+
+    sample_indexes = sorted(
+        {0, len(messages) // 2, len(messages) - 1}
+    )
+
+    for index in sample_indexes:
+        signature = sign_clean(
+            mldsa,
+            sk,
+            messages[index],
+        )
+
+        assert signature == signatures[index]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("scheme", ML_DSA_SCHEMES)
+def test_deterministic_signature_matches_openssl(tmp_path, scheme):
+    mldsa = get_mldsa(scheme)
+
+    seed = bytes(range(32))
+    message = os.urandom(32)
+
+    _pk, sk = mldsa.key_derive(seed)
+    python_signature = sign_clean(mldsa, sk, message)
+
+    message_path = tmp_path / "messages.bin"
+    pem_path = tmp_path / "key.pem"
+    openssl_sig_path = tmp_path / "openssl.sig"
+
+    message_path.write_bytes(message)
+
+    subprocess.run(
+        [
+            "openssl",
+            "genpkey",
+            "-algorithm",
+            f"ML-DSA-{scheme}",
+            "-pkeyopt",
+            f"hexseed:{seed.hex()}",
+            "-out",
+            str(pem_path),
+        ],
+        check=True,
+    )
+
+    # Sign the same message deterministically
+    subprocess.run(
+        [
+            "openssl",
+            "pkeyutl",
+            "-sign",
+            "-in",
+            str(message_path),
+            "-inkey",
+            str(pem_path),
+            "-out",
+            str(openssl_sig_path),
+            "-pkeyopt",
+            "deterministic:1",
+        ],
+        check=True,
+    )
+
+    openssl_signature = openssl_sig_path.read_bytes()
+
+    assert python_signature == openssl_signature
